@@ -1,8 +1,8 @@
 import cors from 'cors';
 import express from 'express';
-import { errorHandler, notFound } from './middleware/errors.js';
-import { inventoryRouter, masterRouter } from './modules/inventory/routes.js';
-import { businessRouter } from './modules/business-routes.js';
+import { errorHandler, notFound } from './src/middleware/errors.js';
+import { inventoryRouter, masterRouter } from './src/modules/inventory/routes.js';
+import { businessRouter } from './src/modules/business-routes.js';
 export const app = express();
 const configuredOrigins = (process.env.CLIENT_URL ?? 'http://localhost:1429')
     .split(',')
