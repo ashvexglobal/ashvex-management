@@ -1,0 +1,785 @@
+:root {
+  font-family: 'DM Sans', Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #202b3c;
+  background: #f4f6fa;
+  --ink: #202b3c;
+  --muted: #697586;
+  --line: #e4e8ef;
+  --surface: #fff;
+  --green: #4f46e5;
+  --green-dark: #4338ca;
+  --mint: #eef0ff;
+}
+
+body {
+  min-width: 320px;
+  background: #f4f6fa;
+  color: var(--ink);
+}
+
+.sidebar {
+  width: 254px;
+  padding: 24px 16px 18px;
+  background: #fff;
+  border-color: #e4e8ef;
+}
+
+.brand {
+  color: #202b3c;
+}
+
+.brand-mark,
+.button-primary {
+  background: #4f46e5;
+}
+
+.brand-mark {
+  border-radius: 7px;
+}
+
+.brand-light {
+  color: #697586;
+}
+
+.workspace-icon {
+  background: #eef0ff;
+  color: #4f46e5;
+}
+
+.nav-item.active,
+.workspace-tab.selected {
+  background: #eef0ff;
+  color: #4338ca;
+}
+
+.nav-item.active svg,
+.workspace-tab.selected svg {
+  color: #4f46e5;
+}
+
+.nav-item:hover {
+  background: #f5f6fa;
+  color: #3730a3;
+}
+
+.button-primary:hover:not(:disabled) {
+  background: #4338ca;
+}
+
+.main-content {
+  margin-left: 254px;
+  background: #f4f6fa;
+}
+
+.topbar {
+  height: 64px;
+  padding: 0 36px;
+  background: #fff;
+  border-color: #e4e8ef;
+}
+
+.topbar-actions {
+  gap: 16px;
+}
+
+.topbar-company {
+  min-width: 0;
+}
+
+.topbar-company select {
+  width: 180px;
+  max-width: 28vw;
+  height: 36px;
+  padding: 0 30px 0 11px;
+  border: 1px solid #dfe4ec;
+  border-radius: 7px;
+  background: #fff;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.topbar-company select:focus-visible {
+  border-color: #818cf8;
+  outline: 2px solid #c7d2fe;
+  outline-offset: 1px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+.breadcrumb,
+.date-chip {
+  color: #697586;
+  font-size: 13px;
+}
+
+.page-wrap {
+  max-width: 1480px;
+  padding: 32px 36px 52px;
+}
+
+.page-heading h1 {
+  color: #202b3c;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.7px;
+}
+
+.page-heading p {
+  color: #697586;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.eyebrow,
+.panel-kicker {
+  color: #697586;
+  font-size: 11px;
+  letter-spacing: 0.8px;
+}
+
+.eyebrow-mark {
+  background: #6366f1;
+}
+
+.metric-card {
+  min-height: 140px;
+  padding: 18px 19px 16px;
+  border-color: #e4e8ef;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px #17233b0a;
+}
+
+.metric-top {
+  color: #697586;
+  font-size: 13px;
+}
+
+.metric-value {
+  margin-top: 15px;
+  color: #202b3c;
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-note {
+  margin-top: 12px;
+  color: #778295;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.metric-green .metric-icon,
+.metric-blue .metric-icon,
+.metric-orange .metric-icon,
+.metric-red .metric-icon {
+  background: #eef0ff;
+  color: #4f46e5;
+}
+
+.metric-blue .metric-dot,
+.metric-orange .metric-dot,
+.metric-red .metric-dot {
+  background: #818cf8;
+}
+
+.metric-clickable {
+  width: 100%;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.metric-clickable:hover {
+  border-color: #c7c9fa;
+  box-shadow: 0 5px 16px #3730a314;
+  transform: translateY(-1px);
+}
+
+.metric-clickable:focus-visible,
+.nav-item:focus-visible,
+.workspace-tab:focus-visible,
+.business-row-clickable:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 2px;
+}
+
+.panel,
+.metric-card,
+.workspace-switch,
+.location-tile,
+.button,
+.search-field,
+.table-panel {
+  border-radius: 9px;
+}
+
+.panel {
+  border-color: #e4e8ef;
+  box-shadow: 0 1px 3px #17233b08;
+}
+
+.panel h2,
+.table-title-row h2 {
+  color: #202b3c;
+  font-size: 17px;
+}
+
+.text-button {
+  color: #4f46e5;
+  font-size: 12px;
+}
+
+.text-button:hover {
+  color: #3730a3;
+}
+
+.button {
+  height: 40px;
+  padding: 0 15px;
+  font-size: 13px;
+}
+
+.button-outline,
+.button-quiet {
+  border-color: #dfe4ec;
+  color: #475467;
+}
+
+.button-outline:hover:not(:disabled),
+.button-quiet:hover {
+  border-color: #c7c9fa;
+  color: #4338ca;
+}
+
+.workspace-switch {
+  border-color: #e4e8ef;
+  box-shadow: 0 1px 3px #17233b08;
+}
+
+.company-switch-fields strong {
+  color: #697586;
+  font-size: 10px;
+}
+
+.company-switch-fields select {
+  color: #202b3c;
+  font-size: 13px;
+}
+
+.nav-item {
+  height: 42px;
+  font-size: 13px;
+}
+
+.nav-item svg {
+  color: #778295;
+}
+
+.nav-active-dot {
+  background: #6366f1;
+}
+
+.workspace-tabs,
+.finance-subnav {
+  border-color: #e4e8ef;
+  border-radius: 9px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 2px 6px #17233b0a;
+}
+
+.workspace-tab {
+  min-height: 42px;
+  font-size: 12px;
+}
+
+.date-filter-bar {
+  gap: 14px;
+  padding: 14px 16px;
+  border-color: #e4e8ef;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.date-range-caption {
+  color: #697586;
+  font-size: 12px;
+}
+
+.form-field > span {
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.form-field input,
+.form-field select,
+.search-field input,
+.sales-dimension-filters select {
+  min-height: 40px;
+  color: #202b3c;
+  font-size: 13px;
+}
+
+.form-hint,
+.form-error {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.table-title-row {
+  padding: 20px 20px 16px;
+}
+
+.table-toolbar {
+  padding: 0 20px 16px;
+}
+
+.search-field {
+  min-height: 40px;
+  border-color: #dfe4ec;
+}
+
+.search-field input {
+  font-size: 13px;
+}
+
+.common-stock-note {
+  color: #697586;
+  font-size: 11px;
+}
+
+.table-scroll th {
+  font-size: 11px;
+}
+
+.table-scroll td {
+  font-size: 13px;
+}
+
+.product-cell strong,
+.table-scroll td strong {
+  color: #202b3c;
+  font-size: 13px;
+}
+
+.product-cell small,
+.table-scroll td small,
+.table-footer {
+  color: #697586;
+  font-size: 11px;
+}
+
+.status-pill {
+  font-size: 11px;
+}
+
+.business-row {
+  min-height: 44px;
+  color: #475467;
+  font-size: 13px;
+}
+
+.business-row small {
+  color: #697586;
+  font-size: 11px;
+}
+
+.business-row strong {
+  color: #202b3c;
+  font-size: 13px;
+}
+
+.small-count {
+  color: #697586;
+  font-size: 12px;
+}
+
+.movement-row {
+  min-height: 62px;
+}
+
+.movement-main strong {
+  color: #202b3c;
+  font-size: 13px;
+}
+
+.movement-main small {
+  color: #697586;
+  font-size: 11px;
+}
+
+.movement-amount,
+.invoice-total {
+  font-size: 13px;
+}
+
+.empty-inline,
+.table-state,
+.table-empty small {
+  color: #697586;
+  font-size: 13px;
+}
+
+.record-pagination {
+  color: #697586;
+  font-size: 12px;
+}
+
+.record-pagination .button {
+  height: 34px;
+  font-size: 12px;
+}
+
+.location-tile {
+  border-color: #e4e8ef;
+  background: #fafbfe;
+}
+
+.company-sales-panel {
+  padding: 18px;
+}
+
+.company-sales-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.company-sales-summary > div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e8eaf3;
+  border-radius: 8px;
+  background: #f8f9fc;
+}
+
+.company-sales-summary strong,
+.company-sales-summary span {
+  display: block;
+}
+
+.company-sales-summary strong {
+  overflow: hidden;
+  color: #202b3c;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.company-sales-summary span {
+  margin-top: 5px;
+  color: #697586;
+  font-size: 11px;
+}
+
+.company-sales-panel .location-strip {
+  margin-top: 12px;
+}
+
+.location-sales-total {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.location-sales-total strong {
+  color: #202b3c;
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.location-sales-total span,
+.location-sales-products {
+  color: #697586;
+  font-size: 11px;
+}
+
+.location-sales-products {
+  margin-top: 3px;
+}
+
+.location-tile > strong {
+  color: #202b3c;
+  font-size: 14px;
+}
+
+.location-tile > small {
+  color: #697586;
+  font-size: 11px;
+}
+
+.location-tile:hover,
+.business-row-clickable:hover {
+  border-color: #c7c9fa;
+}
+
+.business-row-clickable:hover {
+  background: #f7f7ff;
+}
+
+.watch-row strong,
+.attention-empty strong {
+  color: #202b3c;
+  font-size: 13px;
+}
+
+.watch-row small,
+.attention-empty small {
+  color: #697586;
+  font-size: 11px;
+}
+
+.sales-dimension-filters select {
+  border-color: #dfe4ec;
+  border-radius: 7px;
+}
+
+.ledger-summary-grid small,
+.stock-flow-totals small {
+  color: #697586;
+  font-size: 10px;
+}
+
+.ledger-summary-grid strong {
+  color: #4338ca;
+  font-size: 17px;
+}
+
+.stock-analysis-title strong,
+.stock-analysis-row > span strong {
+  color: #344054;
+  font-size: 12px;
+}
+
+.stock-analysis-title span,
+.stock-analysis-row > span small {
+  color: #697586;
+  font-size: 11px;
+}
+
+.stock-history-table th {
+  font-size: 10px;
+}
+
+.stock-history-table td,
+.stock-history-table td strong {
+  color: #475467;
+  font-size: 11px;
+}
+
+.stock-history-table td small,
+.stock-no-history {
+  color: #697586;
+  font-size: 10px;
+}
+
+.cash-flow-transaction .movement-main strong,
+.farm-month-entry .movement-main strong,
+.expense-row .movement-main strong {
+  font-size: 13px;
+}
+
+.cash-flow-transaction .movement-main small,
+.farm-month-entry .movement-main small,
+.expense-row .movement-main small {
+  font-size: 11px;
+}
+
+.finance-subnav {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  gap: 4px;
+  margin: 0 0 18px;
+  padding: 5px;
+  border: 1px solid #e5eae3;
+  border-radius: 8px;
+  background: rgb(251 250 247 / 96%);
+  box-shadow: 0 4px 14px #283b2b0a;
+  backdrop-filter: blur(10px);
+}
+
+.finance-subnav .workspace-tab {
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 14px;
+}
+
+@media (max-width: 780px) {
+  .sidebar {
+    width: auto;
+    padding: 12px 16px 10px;
+    border-color: #e4e8ef;
+  }
+
+  .main-content {
+    margin-left: 0;
+  }
+
+  .topbar {
+    padding: 0 18px;
+  }
+
+  .topbar-company select {
+    width: 160px;
+    max-width: 32vw;
+  }
+
+  .page-wrap {
+    padding: 24px 18px 40px;
+  }
+
+  .page-heading h1 {
+    font-size: 29px;
+  }
+
+  .workspace-switch {
+    display: flex;
+    margin: 10px 0 0;
+    padding: 7px 9px;
+  }
+
+  .nav-list {
+    margin-top: 9px;
+  }
+
+  .nav-item {
+    height: 38px;
+    font-size: 12px;
+  }
+
+  .metrics-grid {
+    gap: 10px;
+  }
+
+  .metric-card {
+    min-height: 132px;
+    padding: 16px;
+  }
+
+  .metric-value {
+    font-size: 24px;
+  }
+
+  .metric-note {
+    font-size: 10px;
+  }
+
+  .finance-subnav .workspace-tab {
+    min-height: 38px;
+    font-size: 11px;
+  }
+
+  .finance-subnav {
+    top: 0;
+    margin: 0 -4px 14px;
+  }
+}
+
+@media (max-width: 460px) {
+  .page-wrap {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .topbar {
+    padding: 0 12px;
+  }
+
+  .topbar-actions {
+    gap: 0;
+  }
+
+  .topbar-company select {
+    width: 145px;
+    max-width: 39vw;
+  }
+
+  .date-chip {
+    display: none;
+  }
+
+  .page-heading h1 {
+    font-size: 26px;
+  }
+
+  .page-heading p {
+    font-size: 13px;
+  }
+
+  .metric-card {
+    min-height: 122px;
+    padding: 13px 12px;
+  }
+
+  .metric-top {
+    font-size: 11px;
+  }
+
+  .metric-value {
+    font-size: 21px;
+  }
+
+  .metric-note {
+    font-size: 10px;
+  }
+
+  .table-title-row {
+    padding: 15px 12px 12px;
+  }
+
+  .table-toolbar {
+    padding: 0 12px 12px;
+  }
+
+  .business-list-panel {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .company-sales-panel {
+    padding: 14px 12px;
+  }
+
+  .company-sales-summary {
+    gap: 6px;
+  }
+
+  .company-sales-summary > div {
+    padding: 9px 8px;
+  }
+
+  .company-sales-summary strong {
+    font-size: 17px;
+  }
+
+  .company-sales-summary span,
+  .location-sales-total span,
+  .location-sales-products {
+    font-size: 10px;
+  }
+
+  .finance-subnav .workspace-tab {
+    flex: 1;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+}
