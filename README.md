@@ -88,6 +88,7 @@ Open:
 - API health: `http://localhost:5008/api/health`
 
 Services can also be started separately with `npm run dev:client` and `npm run dev:server`.
+The API process calls its health endpoint every 2 minutes while running. By default it uses the local `/api/health` URL; set `HEALTH_CHECK_URL` to a deployed health URL if it should call a specific address. This in-process check does not keep a stopped or suspended hosting service alive.
 
 ## Current API Surface
 
