@@ -64,6 +64,7 @@ const salesBatchSchema = new Schema({
     salesDate: { type: Date, required: true, index: true },
     farmId: { type: Types.ObjectId, ref: 'Farm' },
     marketplace: { type: String, enum: ['AMAZON', 'MEESHO', 'FLIPKART', 'OTHER', 'DIRECT'], required: true },
+    customerId: { type: Types.ObjectId, ref: 'Vendor', index: true },
     customerName: { type: String, trim: true, maxlength: 120 },
     customerCompany: { type: String, trim: true, maxlength: 120 },
     reference: { type: String, trim: true },
@@ -73,6 +74,7 @@ const salesBatchSchema = new Schema({
             productId: { type: Types.ObjectId, ref: 'Product', required: true },
             sku: { type: String, required: true },
             productName: { type: String, required: true },
+            unit: { type: String, trim: true },
             quantity: { type: Number, required: true, min: 0.000001 },
         }],
 }, { timestamps: true });
@@ -84,6 +86,10 @@ const vendorSchema = new Schema({
     mobile: { type: String, trim: true },
     email: { type: String, trim: true, lowercase: true },
     address: { type: String, trim: true },
+    gstin: { type: String, trim: true, uppercase: true },
+    notes: { type: String, trim: true, maxlength: 1000 },
+    isCustomer: { type: Boolean, default: false, index: true },
+    isSupplier: { type: Boolean, default: true, index: true },
     status: { type: String, enum: ['ACTIVE', 'INACTIVE'], default: 'ACTIVE' },
 }, { timestamps: true });
 vendorSchema.index({ name: 1 });
@@ -108,6 +114,16 @@ const vendorPaymentSchema = new Schema({
     referenceNumber: { type: String, trim: true },
     remark: { type: String, trim: true },
 }, { timestamps: true });
+const customerReceiptSchema = new Schema({
+    receiptDate: { type: Date, required: true, index: true },
+    customerId: { type: Types.ObjectId, ref: 'Vendor', required: true, index: true },
+    amount: { type: Number, required: true, min: 0.01 },
+    paymentMethod: { type: String, enum: ['CASH', 'BANK', 'UPI', 'OTHER'] },
+    referenceNumber: { type: String, trim: true, maxlength: 100 },
+    remark: { type: String, trim: true, maxlength: 500 },
+    idempotencyKey: { type: String, trim: true, maxlength: 100 },
+}, { timestamps: true });
+customerReceiptSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 const farmMoneyTransactionSchema = new Schema({
     date: { type: Date, required: true, index: true },
     farmId: { type: Types.ObjectId, ref: 'Farm' },
@@ -133,6 +149,7 @@ const invoiceSchema = new Schema({
     handlingCompanyId: { type: Types.ObjectId, ref: 'Company', required: true },
     marketplace: { type: String, enum: ['DIRECT', 'AMAZON', 'MEESHO', 'FLIPKART', 'OTHER'] },
     vendorId: { type: Types.ObjectId, ref: 'Vendor' },
+    customerId: { type: Types.ObjectId, ref: 'Vendor', index: true },
     farmId: { type: Types.ObjectId, ref: 'Farm' },
     buyer: { customerName: String, companyName: String, mobile: String, email: String, address: String, city: String, state: String, pincode: String, gstin: String },
     subtotal: { type: Number, required: true, min: 0 },
@@ -153,6 +170,7 @@ export const SalesBatch = model('SalesBatch', salesBatchSchema);
 export const Vendor = model('Vendor', vendorSchema);
 export const Purchase = model('Purchase', purchaseSchema);
 export const VendorPayment = model('VendorPayment', vendorPaymentSchema);
+export const CustomerReceipt = model('CustomerReceipt', customerReceiptSchema);
 export const FarmMoneyTransaction = model('FarmMoneyTransaction', farmMoneyTransactionSchema);
 export const Expense = model('Expense', expenseSchema);
 export const Invoice = model('Invoice', invoiceSchema);

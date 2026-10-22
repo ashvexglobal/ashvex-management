@@ -1,14 +1,15 @@
 # Fieldstock Inventory Management
 
-Fieldstock is a MERN + TypeScript internal inventory and daily operations application. MongoDB is the system of record. The current V1 build implements shared Ashvex stock, sales reporting dimensions, vendor purchasing and payments, farm cash tracking, and internal invoices.
+Fieldstock is a MERN + TypeScript internal inventory and daily operations application. MongoDB is the system of record. The current V1 build implements shared Ashvex stock, sales reporting dimensions, customer and supplier ledgers, farm cash tracking, and internal invoices.
 
 ## Business Model
 
 - **Ashvex owns the physical stock.** There is one common quantity and average cost per product in `ProductStock`.
 - **Handling companies** (Ashvex, Ware, Harsh Enterprises, NKGD, Gabanis, Other) identify which business handled a sale. They do not have separate stock balances.
 - **Farms** are sales and receipt reporting dimensions. They do not own or partition stock.
-- **Vendors** supply stock to Ashvex. Finalized purchases and stock-in invoices add units to the same common balance.
-- **Customers/buyers** are captured on sales invoices. Farm money receipts and withdrawals are separate financial tracking and never change inventory.
+- **Parties** use the existing vendor records for suppliers and customer accounts, with customer and supplier roles independently selectable. Finalized purchases and stock-in invoices add units to the same common balance.
+- **Customer invoices and receipts** use a persistent customer link plus an immutable buyer snapshot. Marketplace batches remain operational records and do not create customer receivables.
+- Farm money receipts and withdrawals are separate financial tracking and never change inventory.
 
 A sale through Ware, a marketplace batch associated with a farm, or a sales invoice all deduct from the same Ashvex common stock.
 
@@ -29,6 +30,10 @@ The dashboard has date presets (today, yesterday, this week, this month, last mo
 ### Purchases and Vendors
 
 Add vendors and record a purchase draft with multiple products, quantities, rates, tax/charges, and a vendor invoice reference. Saving the draft does not change stock or vendor outstanding. Review the purchase in the dashboard's **Purchases** list and explicitly **Finalize** it to add stock and update the vendor balance. Record manual vendor payments with date, method, reference, and remark. Vendor outstanding is calculated from finalized purchases and finalized stock-in invoices less payments; it is not stored as a manually maintained purchase field.
+
+### Parties and Customer Ledgers
+
+Use **Parties** to create or update customer and supplier profiles, search by name/contact, and filter active or inactive records. A party can have either role or both. Customer invoices can be linked to a customer while preserving the buyer details printed on the invoice; finalized legacy invoices can be explicitly linked from their preview without matching records automatically. Direct/offline sales batches can also reference a saved customer and retain its name as a snapshot, but remain operational stock batches and do not create customer receivables. On startup, legacy Direct batches are linked to a party only when the trimmed, case-insensitive customer name matches exactly one party name; those parties gain the customer role while retaining the supplier role. Ambiguous names are skipped and logged. Linked batches appear in the customer ledger as quantity-only events. Customer receipts are account-level, positive-amount entries and do not change stock. Customer and supplier ledgers show date-filtered entries, opening and running balances, and product quantities. Receipts exceeding sales are shown as customer credit rather than negative receivables.
 
 ### Farm Money
 
@@ -97,9 +102,10 @@ The API process calls its health endpoint every 2 minutes while running. By defa
 - Common stock: `GET /api/inventory`, `GET /api/inventory/summary`, `GET /api/inventory/movements`, `POST /api/inventory/transactions`
 - Sales batches: `GET/POST /api/inventory/sales-batches`
 - Purchases: `GET/POST /api/purchases` (POST creates a draft), `GET /api/purchases/:id`, `POST /api/purchases/:id/finalize`
-- Vendors/payments: `GET/POST /api/vendors`, `GET /api/vendors/outstanding`, `GET /api/vendors/:id/outstanding`, `POST /api/vendor-payments`
+- Vendors/payments: `GET/POST /api/vendors`, `GET /api/vendors/outstanding`, `GET /api/vendors/:id/outstanding`, `GET /api/vendors/:id/ledger`, `POST /api/vendor-payments`
+- Parties/customer receipts: `GET/POST /api/parties`, `PATCH /api/parties/:id`, `GET /api/parties/:id/ledger`, `GET/POST /api/customer-receipts`
 - Farm money: `GET/POST /api/farm-money`, `GET /api/farm-money/summary`
-- Invoices: `GET/POST /api/invoices`, `GET/PATCH /api/invoices/:id`, `POST /api/invoices/:id/finalize`, `POST /api/invoices/:id/cancel`, `GET /api/invoices/:id/pdf`
+- Invoices: `GET/POST /api/invoices`, `GET/PATCH /api/invoices/:id`, `PATCH /api/invoices/:id/customer` (explicitly link a finalized sales invoice), `POST /api/invoices/:id/finalize`, `POST /api/invoices/:id/cancel`, `GET /api/invoices/:id/pdf`
 - Dashboard: `GET /api/dashboard/summary`, `/daily-sales`, `/product-sales`, `/farm-sales`, `/vendor-outstanding`, `/farm-money`
 
 All sales and stock reports read historical sale and stock-transaction records; dashboard sales include sales batches and finalized sales invoices.
@@ -119,7 +125,7 @@ npm run build
 
 This is a personal-use application. Authentication/role-based access, audit-log screens, marketplace integrations, and bank integrations are intentionally out of scope.
 
-The current product view includes stock out by farm, stock in by vendor, totals, and paginated movement history. Vendor payables show finalized purchase/invoice lines, recorded payments, and a chronological running balance. Payments are not currently allocated to individual purchase bills, so the payable view explains the overall balance without implying bill-level payment allocation. Invoices can be previewed on screen and as printable PDFs before download.
+The current product view includes stock out by farm, stock in by vendor, totals, and paginated movement history. Party ledgers show finalized purchase/sales lines, recorded payments/receipts, and chronological running balances. Receipts and payments are not currently allocated to individual bills, so the views explain overall account balances without implying bill-level allocation. Invoices can be previewed on screen and as printable PDFs before download.
 
 Recommended next updates, in order:
 

@@ -1,6 +1,6 @@
 import mongoose, { Types } from 'mongoose';
 import { AppError } from '../middleware/errors.js';
-import { Company, FarmMoneyTransaction, Farm, Invoice, Product, Purchase, Vendor, VendorPayment } from '../models/inventory.js';
+import { Company, CustomerReceipt, FarmMoneyTransaction, Farm, Invoice, Product, Purchase, SalesBatch, Vendor, VendorPayment } from '../models/inventory.js';
 import { applyStockChangeInSession } from './inventory/service.js';
 async function getAshvexCompany(session) {
     const query = Company.findOne({ code: 'ASHVEX', status: 'ACTIVE' });
@@ -63,8 +63,8 @@ async function applyPurchaseStock(purchase, session) {
         });
     }
 }
-export async function getVendorOutstanding() {
-    const vendors = await Vendor.find({ status: 'ACTIVE' }).sort({ name: 1 }).lean();
+export async function getVendorOutstanding(includeInactive = false) {
+    const vendors = await Vendor.find({ ...(includeInactive ? {} : { status: 'ACTIVE' }), isSupplier: { $ne: false } }).sort({ name: 1 }).lean();
     const [purchases, invoices, payments] = await Promise.all([
         Purchase.aggregate([{ $match: { status: 'FINALIZED' } }, { $group: { _id: '$vendorId', total: { $sum: '$totalAmount' } } }]),
         Invoice.aggregate([{ $match: { status: 'FINALIZED', invoiceType: 'STOCK_IN', vendorId: { $ne: null } } }, { $group: { _id: '$vendorId', total: { $sum: '$grandTotal' } } }]),
@@ -81,8 +81,8 @@ export async function getVendorOutstanding() {
         return { vendor, totalPurchases, totalPaid, outstanding: totalPurchases - totalPaid };
     });
 }
-export async function getVendorLedger(vendorId, page, limit) {
-    const vendor = await Vendor.findOne({ _id: vendorId, status: 'ACTIVE' }).lean();
+export async function getVendorLedger(vendorId, page, limit, from, to, includeInactive = false) {
+    const vendor = await Vendor.findOne({ _id: vendorId, ...(includeInactive ? {} : { status: 'ACTIVE' }), isSupplier: { $ne: false } }).lean();
     if (!vendor)
         throw new AppError('Vendor not found', 404, 'VENDOR_NOT_FOUND');
     const skip = (page - 1) * limit;
@@ -148,42 +148,232 @@ export async function getVendorLedger(vendorId, page, limit) {
         },
         { $sort: { date: 1, sortOrder: 1, _id: 1 } },
         {
+            $setWindowFields: {
+                sortBy: { date: 1, sortOrder: 1, _id: 1 },
+                output: { runningBalance: { $sum: '$amount', window: { documents: ['unbounded', 'current'] } } },
+            },
+        },
+        {
             $facet: {
-                summary: [{
+                opening: from ? [
+                    { $match: { date: { $lt: from } } },
+                    { $sort: { date: -1, sortOrder: -1, _id: -1 } },
+                    { $limit: 1 },
+                    { $project: { runningBalance: 1 } },
+                ] : [{ $match: { date: { $exists: false } } }],
+                summary: [
+                    ...(from ? [{ $match: { date: { $gte: from } } }] : []),
+                    ...(to ? [{ $match: { date: { $lte: to } } }] : []),
+                    {
                         $group: {
                             _id: null,
                             totalPurchases: { $sum: { $cond: [{ $in: ['$eventType', ['PURCHASE', 'STOCK_IN_INVOICE']] }, '$amount', 0] } },
                             totalPaid: { $sum: { $cond: [{ $eq: ['$eventType', 'PAYMENT'] }, { $abs: '$amount' }, 0] } },
                         },
-                    }],
-                events: [
-                    {
-                        $setWindowFields: {
-                            sortBy: { date: 1, sortOrder: 1, _id: 1 },
-                            output: { runningBalance: { $sum: '$amount', window: { documents: ['unbounded', 'current'] } } },
-                        },
                     },
+                ],
+                events: [
+                    ...(from ? [{ $match: { date: { $gte: from } } }] : []),
+                    ...(to ? [{ $match: { date: { $lte: to } } }] : []),
                     { $skip: skip },
                     { $limit: limit },
                     { $project: { sortOrder: 0 } },
                 ],
-                count: [{ $count: 'total' }],
+                count: [
+                    ...(from ? [{ $match: { date: { $gte: from } } }] : []),
+                    ...(to ? [{ $match: { date: { $lte: to } } }] : []),
+                    { $count: 'total' },
+                ],
             },
         },
     ]);
     const summary = result?.summary?.[0] ?? { totalPurchases: 0, totalPaid: 0 };
+    const openingBalance = result?.opening?.[0]?.runningBalance ?? 0;
     const totalEvents = result?.count?.[0]?.total ?? 0;
+    const events = (result?.events ?? []).map((event) => ({
+        ...event,
+        runningBalance: event.runningBalance,
+    }));
     return {
         vendor,
         totalPurchases: summary.totalPurchases,
         totalPaid: summary.totalPaid,
-        outstanding: summary.totalPurchases - summary.totalPaid,
+        outstanding: openingBalance + summary.totalPurchases - summary.totalPaid,
+        openingBalance,
+        events,
+        page,
+        limit,
+        totalEvents,
+        pageCount: Math.ceil(totalEvents / limit),
+    };
+}
+export async function getCustomerLedger(customerId, page, limit, from, to) {
+    const customer = await Vendor.findOne({ _id: customerId, isCustomer: true }).lean();
+    if (!customer)
+        throw new AppError('Customer not found', 404, 'CUSTOMER_NOT_FOUND');
+    const [result] = await Invoice.aggregate([
+        { $match: { customerId: customer._id, invoiceType: 'SALES', status: 'FINALIZED' } },
+        {
+            $project: {
+                eventType: { $literal: 'SALES_INVOICE' },
+                date: '$invoiceDate',
+                documentNumber: '$invoiceNumber',
+                amount: '$grandTotal',
+                debit: '$grandTotal',
+                credit: { $literal: 0 },
+                items: 1,
+                sourceId: '$_id',
+                sortOrder: { $literal: 0 },
+            },
+        },
+        {
+            $unionWith: {
+                coll: CustomerReceipt.collection.name,
+                pipeline: [
+                    { $match: { customerId: customer._id } },
+                    {
+                        $project: {
+                            eventType: { $literal: 'RECEIPT' },
+                            date: '$receiptDate',
+                            documentNumber: '$referenceNumber',
+                            amount: { $multiply: ['$amount', -1] },
+                            debit: { $literal: 0 },
+                            credit: '$amount',
+                            paymentMethod: 1,
+                            referenceNumber: 1,
+                            remark: 1,
+                            sourceId: '$_id',
+                            sortOrder: { $literal: 1 },
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            $unionWith: {
+                coll: SalesBatch.collection.name,
+                pipeline: [
+                    { $match: { customerId: customer._id, marketplace: 'DIRECT' } },
+                    {
+                        $project: {
+                            eventType: { $literal: 'DIRECT_SALE_BATCH' },
+                            date: '$salesDate',
+                            documentNumber: '$batchNumber',
+                            amount: { $literal: 0 },
+                            debit: { $literal: 0 },
+                            credit: { $literal: 0 },
+                            items: 1,
+                            sourceId: '$_id',
+                            sortOrder: { $literal: 0 },
+                        },
+                    },
+                ],
+            },
+        },
+        { $sort: { date: 1, sortOrder: 1, sourceId: 1 } },
+        {
+            $setWindowFields: {
+                sortBy: { date: 1, sortOrder: 1, sourceId: 1 },
+                output: { runningBalance: { $sum: '$amount', window: { documents: ['unbounded', 'current'] } } },
+            },
+        },
+        {
+            $facet: {
+                opening: from ? [
+                    { $match: { date: { $lt: from } } },
+                    { $sort: { date: -1, sortOrder: -1, sourceId: -1 } },
+                    { $limit: 1 },
+                    { $project: { runningBalance: 1 } },
+                ] : [{ $match: { date: { $exists: false } } }],
+                summary: [
+                    ...(from ? [{ $match: { date: { $gte: from } } }] : []),
+                    ...(to ? [{ $match: { date: { $lte: to } } }] : []),
+                    { $group: { _id: null, totalBilled: { $sum: '$debit' }, totalReceived: { $sum: '$credit' } } },
+                ],
+                events: [
+                    ...(from ? [{ $match: { date: { $gte: from } } }] : []),
+                    ...(to ? [{ $match: { date: { $lte: to } } }] : []),
+                    { $skip: (page - 1) * limit },
+                    { $limit: limit },
+                    { $project: { sortOrder: 0 } },
+                ],
+                count: [
+                    ...(from ? [{ $match: { date: { $gte: from } } }] : []),
+                    ...(to ? [{ $match: { date: { $lte: to } } }] : []),
+                    { $count: 'total' },
+                ],
+            },
+        },
+    ]);
+    const fromFilter = from ? { $gte: from } : {};
+    const toFilter = to ? { $lte: to } : {};
+    const quantityFilters = {
+        customerId: customer._id,
+        invoiceType: 'SALES',
+        status: 'FINALIZED',
+        ...(from || to ? { invoiceDate: { ...fromFilter, ...toFilter } } : {}),
+    };
+    const periodSalesBatchFilter = {
+        customerId: customer._id,
+        marketplace: 'DIRECT',
+        ...(from || to ? { salesDate: { ...fromFilter, ...toFilter } } : {}),
+    };
+    const [periodProducts, allProducts] = await Promise.all([
+        Invoice.aggregate([
+            { $match: quantityFilters },
+            { $project: { items: 1 } },
+            { $unionWith: { coll: SalesBatch.collection.name, pipeline: [{ $match: periodSalesBatchFilter }, { $project: { items: 1 } }] } },
+            { $unwind: '$items' },
+            { $group: { _id: { productId: '$items.productId', sku: '$items.sku', productName: '$items.productName', unit: '$items.unit' }, quantity: { $sum: '$items.quantity' } } },
+            { $sort: { '_id.productName': 1, '_id.unit': 1 } },
+        ]),
+        Invoice.aggregate([
+            { $match: { customerId: customer._id, invoiceType: 'SALES', status: 'FINALIZED' } },
+            { $project: { items: 1 } },
+            { $unionWith: { coll: SalesBatch.collection.name, pipeline: [{ $match: { customerId: customer._id, marketplace: 'DIRECT' } }, { $project: { items: 1 } }] } },
+            { $unwind: '$items' },
+            { $group: { _id: { productId: '$items.productId', sku: '$items.sku', productName: '$items.productName', unit: '$items.unit' }, quantity: { $sum: '$items.quantity' } } },
+            { $sort: { '_id.productName': 1, '_id.unit': 1 } },
+        ]),
+    ]);
+    const summary = result?.summary?.[0] ?? { totalBilled: 0, totalReceived: 0 };
+    const openingBalance = result?.opening?.[0]?.runningBalance ?? 0;
+    const closingBalance = openingBalance + summary.totalBilled - summary.totalReceived;
+    const totalEvents = result?.count?.[0]?.total ?? 0;
+    return {
+        customer,
+        totalBilled: summary.totalBilled,
+        totalReceived: summary.totalReceived,
+        openingBalance,
+        closingBalance,
+        amountDue: Math.max(closingBalance, 0),
+        customerCredit: Math.max(-closingBalance, 0),
+        products: periodProducts.map((row) => ({ sku: row._id.sku, productName: row._id.productName, unit: row._id.unit, quantity: row.quantity })),
+        allTimeProducts: allProducts.map((row) => ({ sku: row._id.sku, productName: row._id.productName, unit: row._id.unit, quantity: row.quantity })),
         events: result?.events ?? [],
         page,
         limit,
         totalEvents,
         pageCount: Math.ceil(totalEvents / limit),
     };
+}
+export async function recordCustomerReceipt(input) {
+    const customer = await Vendor.findOne({ _id: input.customerId, status: 'ACTIVE', isCustomer: true });
+    if (!customer)
+        throw new AppError('Customer not found or inactive', 404, 'CUSTOMER_NOT_FOUND');
+    const receiptData = { ...input, receiptDate: new Date(input.receiptDate) };
+    try {
+        return await CustomerReceipt.create(receiptData);
+    }
+    catch (error) {
+        if (input.idempotencyKey && typeof error === 'object' && error !== null && 'code' in error && error.code === 11000) {
+            const existing = await CustomerReceipt.findOne({ idempotencyKey: input.idempotencyKey });
+            if (existing && existing.customerId.toString() === input.customerId && existing.amount === input.amount && existing.receiptDate.getTime() === receiptData.receiptDate.getTime())
+                return existing;
+            throw new AppError('Receipt request key has already been used', 409, 'DUPLICATE_RECEIPT_REQUEST');
+        }
+        throw error;
+    }
 }
 export async function recordVendorPayment(input) {
     const vendor = await Vendor.findOne({ _id: input.vendorId, status: 'ACTIVE' });
@@ -283,6 +473,9 @@ export async function createInvoiceDraft(input) {
         throw new AppError('Handling company is required for a sales invoice', 400, 'HANDLING_COMPANY_REQUIRED');
     if (input.invoiceType === 'STOCK_IN' && !input.vendorId)
         throw new AppError('Vendor is required for a stock-in invoice', 400, 'VENDOR_REQUIRED');
+    if (input.customerId && (input.invoiceType !== 'SALES' || !await Vendor.exists({ _id: input.customerId, status: 'ACTIVE', isCustomer: true }))) {
+        throw new AppError('Active customer not found', 404, 'CUSTOMER_NOT_FOUND');
+    }
     const handlingCompanyId = input.invoiceType === 'STOCK_IN'
         ? (await getAshvexCompany())._id
         : new Types.ObjectId(input.handlingCompanyId);

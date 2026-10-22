@@ -150,6 +150,7 @@ inventoryRouter.get('/sales-batches', async (request, response) => {
     const salesDate = typeof request.query.date === 'string' ? new Date(request.query.date) : undefined;
     const batches = await SalesBatch.find({ $or: [{ handlingCompanyId: companyId }, { companyId }], ...(salesDate ? { salesDate: { $gte: new Date(salesDate.setHours(0, 0, 0, 0)), $lt: new Date(salesDate.setHours(24, 0, 0, 0)) } } : {}) })
         .populate('farmId', 'name code')
+        .populate('customerId', 'name companyName')
         .sort({ salesDate: -1, createdAt: -1 })
         .limit(100)
         .lean();
@@ -166,6 +167,7 @@ const salesBatchInput = z.object({
     farmId: objectId.optional(),
     salesDate: z.string().datetime(),
     marketplace: z.enum(['AMAZON', 'MEESHO', 'FLIPKART', 'OTHER', 'DIRECT']),
+    customerId: objectId.optional(),
     customerName: z.string().trim().max(120).optional(),
     customerCompany: z.string().trim().max(120).optional(),
     reference: z.string().trim().max(100).optional(),
@@ -176,6 +178,8 @@ inventoryRouter.post('/sales-batches', async (request, response) => {
     const parsed = salesBatchInput.safeParse(request.body);
     if (!parsed.success)
         throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid sales batch', 400, 'VALIDATION_ERROR');
+    if (parsed.data.customerId && parsed.data.marketplace !== 'DIRECT')
+        throw new AppError('A party can only be selected for direct/offline sales', 400, 'CUSTOMER_REQUIRES_DIRECT_SALE');
     response.status(201).json({ success: true, data: await createSalesBatch(parsed.data) });
 });
 export const masterRouter = Router();

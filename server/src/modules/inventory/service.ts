@@ -1,5 +1,5 @@
 import mongoose, { Types } from 'mongoose';
-import { Farm, Product, ProductStock, SalesBatch, StockTransaction } from '../../models/inventory.js';
+import { Farm, Product, ProductStock, SalesBatch, StockTransaction, Vendor } from '../../models/inventory.js';
 import { AppError } from '../../middleware/errors.js';
 
 const inboundTypes = new Set(['OPENING', 'PURCHASE', 'SALES_RETURN', 'TRANSFER_IN', 'ADJUSTMENT_IN']);
@@ -143,6 +143,7 @@ export type SalesBatchInput = {
   farmId?: string;
   salesDate: string;
   marketplace: 'AMAZON' | 'MEESHO' | 'FLIPKART' | 'OTHER' | 'DIRECT';
+  customerId?: string;
   customerName?: string;
   customerCompany?: string;
   reference?: string;
@@ -160,6 +161,11 @@ export async function createSalesBatch(input: SalesBatchInput) {
         const farm = await Farm.findOne({ _id: farmId, status: 'ACTIVE' }).session(session);
         if (!farm) throw new AppError('Farm not found', 404, 'FARM_NOT_FOUND');
       }
+      const customer = input.customerId
+        ? await Vendor.findOne({ _id: input.customerId, status: 'ACTIVE', isCustomer: true }).session(session)
+        : null;
+      if (input.customerId && !customer) throw new AppError('Active customer not found', 404, 'CUSTOMER_NOT_FOUND');
+      if (input.customerId && input.marketplace !== 'DIRECT') throw new AppError('A party can only be selected for direct/offline sales', 400, 'CUSTOMER_REQUIRES_DIRECT_SALE');
       const handlingCompanyId = new Types.ObjectId(input.companyId);
       const handlingCompany = await mongoose.model('Company').findOne({ _id: handlingCompanyId, status: 'ACTIVE' }).session(session);
       if (!handlingCompany) throw new AppError('Select a valid handling company', 404, 'HANDLING_COMPANY_NOT_FOUND');
@@ -173,7 +179,7 @@ export async function createSalesBatch(input: SalesBatchInput) {
       const batchNumber = `SB-${new Date(input.salesDate).toISOString().slice(0, 10).replaceAll('-', '')}-${new Types.ObjectId().toString().slice(-6).toUpperCase()}`;
       const batchItems = [...combinedItems].map(([productId, quantity]) => {
         const product = productsById.get(productId)!;
-        return { productId: product._id, sku: product.sku, productName: product.name, quantity };
+        return { productId: product._id, sku: product.sku, productName: product.name, unit: product.unit, quantity };
       });
       const [batch] = await SalesBatch.create([{
         handlingCompanyId,
@@ -181,8 +187,9 @@ export async function createSalesBatch(input: SalesBatchInput) {
         salesDate: new Date(input.salesDate),
         farmId,
         marketplace: input.marketplace,
-        customerName: input.marketplace === 'DIRECT' ? input.customerName : undefined,
-        customerCompany: input.marketplace === 'DIRECT' ? input.customerCompany : undefined,
+        customerId: input.marketplace === 'DIRECT' ? customer?._id : undefined,
+        customerName: input.marketplace === 'DIRECT' ? customer?.name ?? input.customerName : undefined,
+        customerCompany: input.marketplace === 'DIRECT' ? customer?.companyName ?? input.customerCompany : undefined,
         reference: input.reference,
         notes: input.notes,
         totalQuantity: batchItems.reduce((sum, item) => sum + item.quantity, 0),

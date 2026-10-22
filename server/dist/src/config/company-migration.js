@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { Company, Expense, Farm, FarmMoneyTransaction, Invoice, Product, ProductStock, Purchase, SalesBatch, StockTransaction, Vendor, VendorPayment } from '../models/inventory.js';
+import { Company, CustomerReceipt, Expense, Farm, FarmMoneyTransaction, Invoice, Product, ProductStock, Purchase, SalesBatch, StockTransaction, Vendor, VendorPayment } from '../models/inventory.js';
 async function dropIndexIfPresent(collectionName, indexName) {
     const collection = Product.db.collection(collectionName);
     try {
@@ -90,5 +90,41 @@ export async function migrateLegacyCompanyData() {
         dropIndexIfPresent('farms', 'companyId_1_code_1'),
         dropIndexIfPresent('productstocks', 'companyId_1_productId_1_farmId_1'),
     ]);
-    await Promise.all([Company, Expense, Farm, FarmMoneyTransaction, Invoice, Product, ProductStock, Purchase, SalesBatch, StockTransaction, Vendor, VendorPayment].map((model) => model.createIndexes()));
+    const directSalesWithNames = await SalesBatch.collection.find({ marketplace: 'DIRECT', customerId: { $exists: false }, customerName: { $type: 'string', $ne: '' } }, { projection: { customerName: 1 } }).toArray();
+    const vendors = await Vendor.collection.find({}, { projection: { name: 1, isCustomer: 1 } }).toArray();
+    const vendorByName = new Map();
+    for (const vendor of vendors) {
+        const normalizedName = String(vendor.name ?? '').trim().toLocaleLowerCase();
+        if (!normalizedName)
+            continue;
+        vendorByName.set(normalizedName, [...(vendorByName.get(normalizedName) ?? []), vendor]);
+    }
+    const matchedCustomerIds = new Set();
+    let linkedDirectSales = 0;
+    let ambiguousDirectSales = 0;
+    for (const sale of directSalesWithNames) {
+        const normalizedName = String(sale.customerName ?? '').trim().toLocaleLowerCase();
+        const matches = vendorByName.get(normalizedName) ?? [];
+        if (matches.length !== 1) {
+            if (matches.length > 1)
+                ambiguousDirectSales += 1;
+            continue;
+        }
+        const party = matches[0];
+        if (!party?._id)
+            continue;
+        await SalesBatch.collection.updateOne({ _id: sale._id, marketplace: 'DIRECT', customerId: { $exists: false } }, { $set: { customerId: party._id } });
+        matchedCustomerIds.add(String(party._id));
+        linkedDirectSales += 1;
+    }
+    if (matchedCustomerIds.size) {
+        await Vendor.collection.updateMany({ _id: { $in: [...matchedCustomerIds].map((partyId) => new Types.ObjectId(partyId)) } }, { $set: { isCustomer: true } });
+    }
+    if (ambiguousDirectSales) {
+        console.warn(`Skipped ${ambiguousDirectSales} historical direct sales batches because customer names match multiple parties.`);
+    }
+    if (linkedDirectSales) {
+        console.info(`Linked ${linkedDirectSales} historical direct sales batches to uniquely matching parties by exact normalized name.`);
+    }
+    await Promise.all([Company, CustomerReceipt, Expense, Farm, FarmMoneyTransaction, Invoice, Product, ProductStock, Purchase, SalesBatch, StockTransaction, Vendor, VendorPayment].map((model) => model.createIndexes()));
 }

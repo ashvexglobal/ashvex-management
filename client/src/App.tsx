@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import axios from 'axios';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownLeft, ArrowUpRight, Boxes, CircleAlert, Clock3, Command, Download, Eye, Leaf, MapPin, Minus, PackagePlus, Plus, Search, Sprout, Wallet, Warehouse, X } from 'lucide-react';
-import { api, type Farm, type FarmMoneyMonth, type FarmMoneyTransaction, type Product, type StockRow, type VendorLedger } from './lib/api';
+import { ArrowDownLeft, ArrowUpRight, Boxes, CircleAlert, Clock3, Command, Download, Eye, Leaf, MapPin, Minus, PackagePlus, Plus, Search, Sprout, Users, Wallet, Warehouse, X } from 'lucide-react';
+import { api, type Farm, type FarmMoneyMonth, type FarmMoneyTransaction, type Party, type Product, type StockRow, type VendorLedger } from './lib/api';
+import PartiesWorkspace from './PartiesWorkspace';
 
 const money = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
 const quantity = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
@@ -14,7 +15,7 @@ function mutationErrorMessage(error: unknown, fallback: string) {
 
 type ModalName = 'company' | 'product' | 'farm' | 'movement' | 'sales' | 'purchase' | 'vendor' | 'payment' | 'farmMoney' | 'invoice' | 'expense' | null;
 type DatePreset = 'TODAY' | 'YESTERDAY' | 'THIS_WEEK' | 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_6_MONTHS' | 'THIS_YEAR' | 'CUSTOM';
-type WorkspaceTab = 'dashboard' | 'stock' | 'sales' | 'vendors' | 'farms' | 'cashflow' | 'expenses';
+type WorkspaceTab = 'dashboard' | 'stock' | 'sales' | 'parties' | 'vendors' | 'farms' | 'cashflow' | 'expenses';
 type FarmMoneyInput = { date: string; transactionType: 'FARM_RECEIPT' | 'WITHDRAWAL'; farmId?: string; marketplace?: 'MEESHO' | 'AMAZON' | 'FLIPKART' | 'OTHER'; amount: number; bankAccount?: string; reference?: string; remark?: string };
 
 const workspaceTabs: Array<{ id: Exclude<WorkspaceTab, 'expenses'>; label: string; icon: ReactNode }> = [
@@ -22,6 +23,7 @@ const workspaceTabs: Array<{ id: Exclude<WorkspaceTab, 'expenses'>; label: strin
   { id: 'stock', label: 'Products & Stock', icon: <Warehouse size={16} /> },
   { id: 'farms', label: 'Companies & Channels', icon: <MapPin size={16} /> },
   { id: 'sales', label: 'Sales', icon: <ArrowUpRight size={16} /> },
+  { id: 'parties', label: 'Parties', icon: <Users size={16} /> },
   { id: 'vendors', label: 'Purchases & Suppliers', icon: <PackagePlus size={16} /> },
   { id: 'cashflow', label: 'Payouts & Cash', icon: <Wallet size={16} /> },
 ];
@@ -46,6 +48,7 @@ export default function App() {
   const [selectedFarmMoneyFarm, setSelectedFarmMoneyFarm] = useState<Farm | null>(null);
   const [farmMoneyEdit, setFarmMoneyEdit] = useState<FarmMoneyTransaction | null>(null);
   const [previewInvoiceId, setPreviewInvoiceId] = useState('');
+  const [previewPurchaseId, setPreviewPurchaseId] = useState('');
   const [selectedVendorId, setSelectedVendorId] = useState('');
   const [vendorLedgerPage, setVendorLedgerPage] = useState(1);
   const [notice, setNotice] = useState('');
@@ -62,6 +65,7 @@ export default function App() {
   const farms = useQuery({ queryKey: ['farms', companyId], queryFn: () => api.farms(companyId), enabled: Boolean(companyId) });
   const salesBatches = useQuery({ queryKey: ['sales-batches', companyId], queryFn: () => api.salesBatches(companyId), enabled: Boolean(companyId) });
   const vendors = useQuery({ queryKey: ['vendors'], queryFn: api.vendors });
+  const customers = useQuery({ queryKey: ['parties', 'CUSTOMER', 'ACTIVE'], queryFn: () => api.parties({ role: 'CUSTOMER', status: 'ACTIVE' }) });
   const purchases = useQuery({ queryKey: ['purchases'], queryFn: api.purchases });
   const vendorOutstanding = useQuery({ queryKey: ['vendor-outstanding'], queryFn: api.vendorOutstanding });
   const vendorLedger = useQuery({
@@ -95,6 +99,10 @@ export default function App() {
   const createMovement = useMutation({ mutationFn: (data: Parameters<typeof api.createMovement>[1]) => api.createMovement(companyId, data), onSuccess: refresh });
   const createSalesBatch = useMutation({ mutationFn: (data: Parameters<typeof api.createSalesBatch>[1]) => api.createSalesBatch(companyId, data), onSuccess: refresh });
   const createVendor = useMutation({ mutationFn: api.createVendor, onSuccess: refresh });
+  const quickCreateCustomer = useMutation({
+    mutationFn: api.saveParty,
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['parties'] }); },
+  });
   const createPurchase = useMutation({ mutationFn: api.createPurchase, onSuccess: refresh });
   const finalizePurchase = useMutation({ mutationFn: api.finalizePurchase, onSuccess: refresh });
   const createPayment = useMutation({ mutationFn: api.createVendorPayment, onSuccess: refresh });
@@ -105,6 +113,10 @@ export default function App() {
     onSuccess: async () => { setFarmMoneyEdit(null); await refresh(); },
   });
   const createInvoice = useMutation({ mutationFn: api.createInvoice, onSuccess: refresh });
+  const linkInvoiceCustomer = useMutation({
+    mutationFn: ({ invoiceId, customerId }: { invoiceId: string; customerId: string }) => api.linkInvoiceCustomer(invoiceId, customerId),
+    onSuccess: async () => { await queryClient.invalidateQueries(); },
+  });
   const finalizeInvoice = useMutation({ mutationFn: api.finalizeInvoice, onSuccess: refresh });
   const cancelInvoice = useMutation({ mutationFn: api.cancelInvoice, onSuccess: refresh });
   const downloadInvoicePdf = async (invoiceId: string, invoiceNumber: string) => {
@@ -170,10 +182,11 @@ export default function App() {
         <div className="page-wrap">
           {hasError && <div className="connection-alert"><CircleAlert size={17} /><span>Could not load live inventory. Start the API and connect MongoDB to view and save business data.</span><a href="/">Retry</a></div>}
           {notice && <div className="toast-note">{notice}</div>}
-          <section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-mark" />{currentCompany?.name.toUpperCase() ?? 'INVENTORY CONTROL'}</div><h1>{activeTab === 'dashboard' ? 'Inventory, in good order.' : activeTab === 'expenses' ? 'Operating expenses' : workspaceTabs.find((tab) => tab.id === activeTab)?.label}</h1><p>{activeTab === 'dashboard' ? 'A clear view of physical stock, sales channels, supplier balances, and platform payouts.' : activeTab === 'stock' ? 'Search products, review physical inventory, and open a product to see its movement history.' : activeTab === 'sales' ? 'Review product sales across companies and marketplaces.' : activeTab === 'vendors' ? 'Review supplier balances, purchase bills, and payments.' : activeTab === 'cashflow' ? 'Keep platform receipts, bank cash, withdrawals, and operating costs distinct.' : activeTab === 'expenses' ? 'Record and review operating expenses by date and category.' : 'Review selling companies, channel performance, and sales attribution.'}</p></div><div className="heading-actions">{activeTab === 'stock' ? <button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase / stock-in</button> : activeTab === 'vendors' ? <><button className="button button-quiet" onClick={() => setModal('vendor')}><Plus size={16} /> Add supplier</button><button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase</button></> : activeTab === 'cashflow' ? <><button className="button button-quiet" onClick={() => { setFarmMoneyInitialType('FARM_RECEIPT'); setModal('farmMoney'); }}><ArrowDownLeft size={16} /> Add payout receipt</button><button className="button button-primary" onClick={() => { setFarmMoneyInitialType('WITHDRAWAL'); setModal('farmMoney'); }}><ArrowUpRight size={16} /> Record withdrawal</button></> : activeTab === 'expenses' ? <button className="button button-primary" onClick={() => setModal('expense')}><Plus size={16} /> Add expense</button> : activeTab === 'farms' ? <><button className="button button-quiet" onClick={() => setModal('company')}><Plus size={16} /> Add inventory company</button><button className="button button-primary" onClick={() => setModal('farm')}><Plus size={16} /> Add sales company</button></> : activeTab === 'sales' ? <button className="button button-primary" onClick={() => setModal('sales')}><ArrowUpRight size={16} /> Enter sales batch</button> : <><button className="button button-quiet" onClick={() => { navigateTo('farms'); setModal('farm'); }}><Plus size={16} /> Add sales company</button><button className="button button-primary" onClick={() => { navigateTo('sales'); setModal('sales'); }}><ArrowUpRight size={16} /> Enter sales batch</button></>}</div></section>
+          <section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-mark" />{currentCompany?.name.toUpperCase() ?? 'INVENTORY CONTROL'}</div><h1>{activeTab === 'dashboard' ? 'Inventory, in good order.' : activeTab === 'expenses' ? 'Operating expenses' : workspaceTabs.find((tab) => tab.id === activeTab)?.label}</h1><p>{activeTab === 'dashboard' ? 'A clear view of physical stock, sales channels, supplier balances, and platform payouts.' : activeTab === 'stock' ? 'Search products, review physical inventory, and open a product to see its movement history.' : activeTab === 'sales' ? 'Review product sales across companies and marketplaces.' : activeTab === 'parties' ? 'Manage customer and supplier profiles, payments, and account statements.' : activeTab === 'vendors' ? 'Review supplier balances, purchase bills, and payments.' : activeTab === 'cashflow' ? 'Keep platform receipts, bank cash, withdrawals, and operating costs distinct.' : activeTab === 'expenses' ? 'Record and review operating expenses by date and category.' : 'Review selling companies, channel performance, and sales attribution.'}</p></div><div className="heading-actions">{activeTab === 'stock' ? <button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase / stock-in</button> : activeTab === 'vendors' ? <><button className="button button-quiet" onClick={() => setModal('vendor')}><Plus size={16} /> Add supplier</button><button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase</button></> : activeTab === 'cashflow' ? <><button className="button button-quiet" onClick={() => { setFarmMoneyInitialType('FARM_RECEIPT'); setModal('farmMoney'); }}><ArrowDownLeft size={16} /> Add payout receipt</button><button className="button button-primary" onClick={() => { setFarmMoneyInitialType('WITHDRAWAL'); setModal('farmMoney'); }}><ArrowUpRight size={16} /> Record withdrawal</button></> : activeTab === 'expenses' ? <button className="button button-primary" onClick={() => setModal('expense')}><Plus size={16} /> Add expense</button> : activeTab === 'farms' ? <><button className="button button-quiet" onClick={() => setModal('company')}><Plus size={16} /> Add inventory company</button><button className="button button-primary" onClick={() => setModal('farm')}><Plus size={16} /> Add sales company</button></> : activeTab === 'sales' ? <button className="button button-primary" onClick={() => setModal('sales')}><ArrowUpRight size={16} /> Enter sales batch</button> : activeTab === 'parties' ? null : <><button className="button button-quiet" onClick={() => { navigateTo('farms'); setModal('farm'); }}><Plus size={16} /> Add sales company</button><button className="button button-primary" onClick={() => { navigateTo('sales'); setModal('sales'); }}><ArrowUpRight size={16} /> Enter sales batch</button></>}</div></section>
           {(activeTab === 'cashflow' || activeTab === 'expenses') && <nav className="finance-subnav" aria-label="Payouts and cash sections"><button className={`workspace-tab ${activeTab === 'cashflow' ? 'selected' : ''}`} aria-current={activeTab === 'cashflow' ? 'page' : undefined} onClick={() => navigateTo('cashflow')}><Wallet size={16} /><span>Payouts & Cash</span></button><button className={`workspace-tab ${activeTab === 'expenses' ? 'selected' : ''}`} aria-current={activeTab === 'expenses' ? 'page' : undefined} onClick={() => navigateTo('expenses')}><ArrowUpRight size={16} /><span>Operating expenses</span></button></nav>}
 
           {(activeTab === 'dashboard' || activeTab === 'cashflow' || activeTab === 'expenses') && <section className="date-filter-bar"><label className="form-field"><span>{activeTab === 'cashflow' ? 'Payout period' : activeTab === 'expenses' ? 'Expense period' : 'Dashboard period'}</span><select value={datePreset} onChange={(event) => { setDatePreset(event.target.value as DatePreset); setCashFlowPage(1); setExpensePage(1); }}><option value="TODAY">Today</option><option value="YESTERDAY">Yesterday</option><option value="THIS_WEEK">This week</option><option value="THIS_MONTH">This month</option><option value="LAST_MONTH">Last month</option><option value="LAST_6_MONTHS">Last 6 months</option><option value="THIS_YEAR">This year</option><option value="CUSTOM">Custom range</option></select></label>{datePreset === 'CUSTOM' && <><label className="form-field"><span>From</span><input type="date" value={customFrom} onChange={(event) => { setCustomFrom(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label><label className="form-field"><span>To</span><input type="date" value={customTo} onChange={(event) => { setCustomTo(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label></>}{activeTab === 'cashflow' && <label className="form-field"><span>Sales company</span><select value={cashFlowFarmFilter} onChange={(event) => { setCashFlowFarmFilter(event.target.value); setCashFlowPage(1); }}><option value="">All companies</option>{farms.data?.map((farm) => <option key={farm._id} value={farm._id}>{farm.name}</option>)}</select></label>}<span className="date-range-caption">{dateRange.label}</span></section>}
+          {activeTab === 'parties' && <PartiesWorkspace onOpenInvoice={(invoiceId) => setPreviewInvoiceId(invoiceId)} onOpenPurchase={(purchaseId) => setPreviewPurchaseId(purchaseId)} />}
 
           {activeTab === 'dashboard' && <section className="metrics-grid" aria-label="Daily business summary">
             <Metric label="Active products" value={summary.data?.productCount ?? 0} icon={<PackagePlus size={18} />} accent="green" note="Browse product balances" loading={summary.isLoading} onClick={() => navigateTo('stock')} />
@@ -247,7 +260,7 @@ export default function App() {
             <div className="table-scroll"><table><thead><tr><th>PRODUCT</th><th>ON HAND</th><th>MIN. STOCK</th><th>PURCHASE COST</th><th>SELLING PRICE</th><th>STOCK VALUE</th><th>STATUS</th><th>DETAILS</th></tr></thead><tbody>{inventory.isLoading ? <tr><td colSpan={8} className="table-state">Loading physical inventory…</td></tr> : rows.length ? visibleRows.map((row) => <StockTableRow key={row._id} row={row} />) : <tr><td colSpan={8} className="table-state"><div className="table-empty"><span className="empty-symbol"><Boxes size={20} /></span><strong>{search ? 'No matching products found' : 'No stock balances yet'}</strong><small>{search ? 'Try a different product or SKU.' : 'Add products, then enter opening stock.'}</small>{!search && <button className="text-button" onClick={() => setModal('product')}>Create first product <Plus size={14} /></button>}</div></td></tr>}</tbody></table></div><div className="table-footer"><span>Showing <strong>{rows.length ? (productPage - 1) * productPageSize + 1 : 0}–{Math.min(productPage * productPageSize, rows.length)}</strong> of {rows.length} products</span><span>Sales companies and channels do not create separate stock pools</span></div>{productPageCount > 1 && <Pagination page={productPage} pageCount={productPageCount} onChange={setProductPage} />}
           </section>}
 
-          {activeTab === 'sales' && <section className="panel movement-panel"><div className="panel-head"><div><span className="panel-kicker">DAILY SALES</span><h2>Sales batches</h2></div><button className="text-button" onClick={() => setModal('sales')}>New batch <Plus size={14} /></button></div>{salesBatches.isLoading ? <div className="empty-inline">Loading sales batches…</div> : salesBatches.data?.length ? <div className="movement-list">{salesBatches.data.map((batch) => <div className="movement-row" key={batch._id}><span className="movement-icon movement-out"><ArrowUpRight size={16} /></span><div className="movement-main"><strong>{batch.marketplace === 'DIRECT' ? 'Direct sale' : batch.marketplace} · {batch.farmId?.name ?? 'No farm assigned'}</strong><small>{batch.customerName || batch.customerCompany ? [batch.customerName, batch.customerCompany].filter(Boolean).join(' · ') + ' · ' : ''}{batch.items.map((item) => `${item.sku} × ${quantity.format(item.quantity)}`).join('  ·  ')}</small></div><span className="movement-amount amount-out">−{quantity.format(batch.totalQuantity)}</span><time>{new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short' }).format(new Date(batch.salesDate))}</time></div>)}</div> : <div className="empty-inline movement-empty">Record one batch per farm and marketplace, or a direct offline sale.</div>}</section>}
+          {activeTab === 'sales' && <section className="panel movement-panel"><div className="panel-head"><div><span className="panel-kicker">DAILY SALES</span><h2>Sales batches</h2></div><button className="text-button" onClick={() => setModal('sales')}>New batch <Plus size={14} /></button></div>{salesBatches.isLoading ? <div className="empty-inline">Loading sales batches…</div> : salesBatches.data?.length ? <div className="movement-list">{salesBatches.data.map((batch) => <div className="movement-row" key={batch._id}><span className="movement-icon movement-out"><ArrowUpRight size={16} /></span><div className="movement-main"><strong>{batch.marketplace === 'DIRECT' ? 'Direct sale' : batch.marketplace} · {batch.farmId?.name ?? 'No farm assigned'}</strong><small>{batch.customerId?.name ?? batch.customerName ?? batch.customerCompany ? `${batch.customerId?.name ?? [batch.customerName, batch.customerCompany].filter(Boolean).join(' · ')} · ` : ''}{batch.items.map((item) => `${item.sku} × ${quantity.format(item.quantity)}`).join('  ·  ')}</small></div><span className="movement-amount amount-out">−{quantity.format(batch.totalQuantity)}</span><time>{new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short' }).format(new Date(batch.salesDate))}</time></div>)}</div> : <div className="empty-inline movement-empty">Record one batch per farm and marketplace, or a direct offline sale.</div>}</section>}
           {(activeTab === 'vendors' || activeTab === 'farms') && <section className="business-panels">
             {activeTab === 'vendors' && <div className="panel business-list-panel" id="vendor-payables"><div className="panel-head"><div><span className="panel-kicker">SUPPLIER PAYABLES</span><h2>Outstanding by supplier</h2></div><div className="panel-actions"><button className="text-button" onClick={() => setModal('vendor')}>Add supplier <Plus size={14} /></button><button className="text-button" onClick={() => setModal('payment')}>Record payment <Plus size={14} /></button></div></div>{vendorOutstanding.data?.length ? <>{visibleVendorRows.map((item) => <button className="business-row business-row-clickable" key={item.vendor._id} onClick={() => { setSelectedVendorId(item.vendor._id); setVendorLedgerPage(1); }}><span>{item.vendor.name}<small>{money.format(item.totalPurchases)} purchased</small></span><small>{money.format(item.totalPaid)} paid</small><strong>{money.format(item.outstanding)}</strong></button>)}{vendorPageCount > 1 && <Pagination page={vendorPage} pageCount={vendorPageCount} onChange={setVendorPage} />}</> : <div className="empty-inline">Add suppliers and finalize purchases to see balances.</div>}</div>}
             {activeTab === 'farms' && <div className="panel business-list-panel"><div className="panel-head"><div><span className="panel-kicker">PAYOUT SUMMARY</span><h2>Receipts by sales company</h2></div><button className="text-button" onClick={() => { setFarmMoneyInitialType('FARM_RECEIPT'); setModal('farmMoney'); }}>Add receipt <Plus size={14} /></button></div>{farmMoney.data?.byFarm.length ? farmMoney.data.byFarm.map((item, index) => <div className="business-row" key={item.farm?.code ?? index}><span>{item.farm?.name ?? 'Sales company'}</span><small>Received</small><strong>{money.format(item.total)}</strong></div>) : <div className="empty-inline">No payout receipts recorded for this period.</div>}</div>}
@@ -262,15 +275,16 @@ export default function App() {
         {modal === 'product' && <ProductForm busy={createProduct.isPending} error={createProduct.error ? 'Could not save product. Check SKU uniqueness and server connection.' : ''} onSubmit={(data) => createProduct.mutate(data)} />}
         {modal === 'farm' && <FarmForm busy={createFarm.isPending} error={createFarm.error ? 'Could not save sales company. The code may already exist.' : ''} onSubmit={(data) => createFarm.mutate(data)} />}
         {modal === 'movement' && <MovementForm products={products.data ?? []} farms={farms.data ?? []} busy={createMovement.isPending} error={createMovement.error ? mutationErrorMessage(createMovement.error, 'Stock update rejected. Check available stock and try again.') : ''} onSubmit={(data) => createMovement.mutate(data)} />}
-        {modal === 'sales' && <SalesBatchForm products={products.data ?? []} farms={farms.data ?? []} busy={createSalesBatch.isPending} error={createSalesBatch.error ? mutationErrorMessage(createSalesBatch.error, 'Could not record batch. Verify available stock at this farm.') : ''} onSubmit={(data) => createSalesBatch.mutate(data)} />}
+        {modal === 'sales' && <SalesBatchForm products={products.data ?? []} farms={farms.data ?? []} customers={customers.data ?? []} busy={createSalesBatch.isPending} error={createSalesBatch.error ? mutationErrorMessage(createSalesBatch.error, 'Could not record batch. Verify available stock at this farm.') : ''} onSubmit={(data) => createSalesBatch.mutate(data)} />}
         {modal === 'vendor' && <VendorForm busy={createVendor.isPending} error={createVendor.error ? mutationErrorMessage(createVendor.error, 'Could not save supplier.') : ''} onSubmit={(data) => createVendor.mutate(data)} />}
         {modal === 'purchase' && <PurchaseForm products={products.data ?? []} vendors={vendors.data ?? []} busy={createPurchase.isPending} error={createPurchase.error ? mutationErrorMessage(createPurchase.error, 'Could not save purchase draft.') : ''} onSubmit={(data) => createPurchase.mutate(data)} />}
         {modal === 'payment' && <VendorPaymentForm vendors={vendors.data ?? []} busy={createPayment.isPending} error={createPayment.error ? mutationErrorMessage(createPayment.error, 'Could not record payment.') : ''} onSubmit={(data) => createPayment.mutate(data)} />}
         {modal === 'farmMoney' && <FarmMoneyForm farms={farms.data ?? []} initialType={farmMoneyInitialType} busy={createFarmMoney.isPending} error={createFarmMoney.error ? mutationErrorMessage(createFarmMoney.error, 'Could not save payout or withdrawal.') : ''} onSubmit={(data) => createFarmMoney.mutate(data)} />}
-        {modal === 'invoice' && <InvoiceForm products={products.data ?? []} farms={farms.data ?? []} vendors={vendors.data ?? []} handlingCompanies={companies.data ?? []} busy={createInvoice.isPending} error={createInvoice.error ? mutationErrorMessage(createInvoice.error, 'Could not save invoice draft.') : ''} onSubmit={(data) => createInvoice.mutate(data)} />}
+        {modal === 'invoice' && <InvoiceForm products={products.data ?? []} farms={farms.data ?? []} vendors={vendors.data ?? []} customers={customers.data ?? []} handlingCompanies={companies.data ?? []} busy={createInvoice.isPending} error={createInvoice.error ? mutationErrorMessage(createInvoice.error, 'Could not save invoice draft.') : ''} createCustomerError={quickCreateCustomer.error ? mutationErrorMessage(quickCreateCustomer.error, 'Could not create customer.') : ''} onCreateCustomer={(data) => quickCreateCustomer.mutateAsync(data)} onSubmit={(data) => createInvoice.mutate(data)} />}
         {modal === 'expense' && <ExpenseForm farms={farms.data ?? []} busy={createExpense.isPending} error={createExpense.error ? mutationErrorMessage(createExpense.error, 'Could not save expense.') : ''} onSubmit={(data) => createExpense.mutate(data)} />}
       </Modal>}
-      {previewInvoiceId && <InvoicePreview invoiceId={previewInvoiceId} invoiceNumber={invoices.data?.find((invoice) => invoice._id === previewInvoiceId)?.invoiceNumber ?? 'Invoice'} onClose={() => setPreviewInvoiceId('')} onDownload={downloadInvoicePdf} />}
+      {previewInvoiceId && <InvoicePreview invoiceId={previewInvoiceId} invoiceNumber={invoices.data?.find((invoice) => invoice._id === previewInvoiceId)?.invoiceNumber ?? 'Invoice'} customers={customers.data ?? []} linking={linkInvoiceCustomer.isPending} linkError={linkInvoiceCustomer.error ? mutationErrorMessage(linkInvoiceCustomer.error, 'Could not link customer.') : ''} onLinkCustomer={(customerId) => linkInvoiceCustomer.mutate({ invoiceId: previewInvoiceId, customerId })} onClose={() => setPreviewInvoiceId('')} onDownload={downloadInvoicePdf} />}
+      {previewPurchaseId && <PurchasePreview purchaseId={previewPurchaseId} onClose={() => setPreviewPurchaseId('')} />}
       {selectedFarmMoneyFarm && <Modal title={`${selectedFarmMoneyFarm.name} · Monthly cash entries`} onClose={() => setSelectedFarmMoneyFarm(null)}>
         <FarmMonthlyLedger farm={selectedFarmMoneyFarm} onEdit={setFarmMoneyEdit} />
       </Modal>}
@@ -455,10 +469,11 @@ function VendorLedgerDetails({ ledger, loading, error, page, onPageChange }: { l
   </>;
 }
 
-function InvoicePreview({ invoiceId, invoiceNumber, onClose, onDownload }: { invoiceId: string; invoiceNumber: string; onClose: () => void; onDownload: (invoiceId: string, invoiceNumber: string) => Promise<void> }) {
+function InvoicePreview({ invoiceId, invoiceNumber, customers, linking, linkError, onLinkCustomer, onClose, onDownload }: { invoiceId: string; invoiceNumber: string; customers: Party[]; linking: boolean; linkError: string; onLinkCustomer: (customerId: string) => void; onClose: () => void; onDownload: (invoiceId: string, invoiceNumber: string) => Promise<void> }) {
   const details = useQuery({ queryKey: ['invoice-details', invoiceId], queryFn: () => api.invoiceDetails(invoiceId) });
   const pdf = useQuery({ queryKey: ['invoice-preview-pdf', invoiceId], queryFn: () => api.invoicePdf(invoiceId) });
   const [pdfUrl, setPdfUrl] = useState('');
+  const [customerId, setCustomerId] = useState('');
   useEffect(() => {
     if (!pdf.data) return;
     const url = URL.createObjectURL(pdf.data);
@@ -478,6 +493,12 @@ function InvoicePreview({ invoiceId, invoiceNumber, onClose, onDownload }: { inv
         {invoice.invoiceType === 'SALES' ? <div><small>BUYER</small><strong>{invoice.buyer?.customerName || invoice.buyer?.companyName || '—'}</strong></div> : null}
         {invoice.farmId && <div><small>FARM</small><strong>{invoice.farmId.name}</strong></div>}
       </div>
+      {invoice.invoiceType === 'SALES' && invoice.status !== 'CANCELLED' && <div className="invoice-customer-link">
+        <span><strong>{invoice.customerId ? `Linked customer: ${invoice.customerId.name}` : invoice.status === 'FINALIZED' ? 'Unassigned historical sale' : 'No customer account linked'}</strong><small>Linking changes the customer ledger relationship only; the printed buyer snapshot remains unchanged.</small></span>
+        <select aria-label="Select customer for this invoice" value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Select customer</option>{customers.map((customer) => <option key={customer._id} value={customer._id}>{customer.name}</option>)}</select>
+        <button className="button button-outline" disabled={!customerId || linking} onClick={() => onLinkCustomer(customerId)}>{linking ? 'Linking…' : invoice.status === 'DRAFT' ? 'Save customer link' : 'Link invoice'}</button>
+        {linkError && <span className="form-error">{linkError}</span>}
+      </div>}
       <div className="invoice-preview-lines">
         <table><thead><tr><th>PRODUCT</th><th>QTY</th><th>RATE</th><th>AMOUNT</th></tr></thead><tbody>
           {invoice.items.map((item, index) => <tr key={`${item.productId}-${index}`}><td><strong>{item.productName}</strong><small>{item.sku}</small></td><td>{quantity.format(item.quantity)} {item.unit}</td><td>{money.format(item.rate)}</td><td>{money.format(item.amount)}</td></tr>)}
@@ -488,6 +509,23 @@ function InvoicePreview({ invoiceId, invoiceNumber, onClose, onDownload }: { inv
         <div className="invoice-pdf-heading"><strong>Printable A4 preview</strong>{pdf.isError && <span className="form-error">Could not load PDF preview.</span>}</div>
         {pdf.isLoading ? <div className="empty-inline">Preparing printable invoice…</div> : pdfUrl ? <iframe title={`Printable PDF preview for ${invoice.invoiceNumber}`} src={pdfUrl} /> : null}
       </div>
+    </>}
+  </Modal>;
+}
+
+function PurchasePreview({ purchaseId, onClose }: { purchaseId: string; onClose: () => void }) {
+  const purchase = useQuery({ queryKey: ['purchase-details', purchaseId], queryFn: () => api.purchaseDetails(purchaseId) });
+  return <Modal title={`Purchase · ${purchase.data?.purchaseNumber ?? ''}`} onClose={onClose}>
+    {purchase.isLoading ? <div className="empty-inline">Loading purchase details…</div> : purchase.isError || !purchase.data ? <div className="form-error">Could not load purchase details.</div> : <>
+      <div className="invoice-preview-summary">
+        <div><small>DATE</small><strong>{new Intl.DateTimeFormat('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(purchase.data.purchaseDate))}</strong></div>
+        <div><small>SUPPLIER</small><strong>{purchase.data.vendorId?.name ?? '—'}</strong></div>
+        <div><small>STATUS</small><strong>{purchase.data.status}</strong></div>
+      </div>
+      <div className="invoice-preview-lines"><table><thead><tr><th>PRODUCT</th><th>QTY</th><th>RATE</th><th>AMOUNT</th></tr></thead><tbody>{purchase.data.items.map((item, index) => <tr key={`${item.sku ?? item.productName}-${index}`}><td><strong>{item.productName ?? item.sku}</strong><small>{item.sku}</small></td><td>{quantity.format(item.quantity ?? 0)} {item.unit ?? ''}</td><td>{money.format(item.rate ?? 0)}</td><td>{money.format(item.amount ?? 0)}</td></tr>)}</tbody></table>
+        <div className="invoice-preview-totals"><span>Subtotal <strong>{money.format(purchase.data.subtotal)}</strong></span><span>Tax / charges <strong>+{money.format(purchase.data.taxCharges)}</strong></span><span className="invoice-preview-grand-total">Bill total <strong>{money.format(purchase.data.totalAmount)}</strong></span></div>
+      </div>
+      {purchase.data.remark && <p className="ledger-explanation">{purchase.data.remark}</p>}
     </>}
   </Modal>;
 }
@@ -607,10 +645,93 @@ function marketplaceLabel(marketplace?: 'MEESHO' | 'AMAZON' | 'FLIPKART' | 'OTHE
   return 'Not specified';
 }
 
-function InvoiceForm({ products, farms, vendors, handlingCompanies, busy, error, onSubmit }: { products: Product[]; farms: Farm[]; vendors: Array<{ _id: string; name: string }>; handlingCompanies: Array<{ _id: string; name: string }>; busy: boolean; error: string; onSubmit: (data: { invoiceType: 'SALES' | 'STOCK_IN'; invoiceDate: string; handlingCompanyId?: string; marketplace?: string; vendorId?: string; farmId?: string; buyer?: Record<string, string>; remark?: string; items: Array<{ productId: string; quantity: number; rate: number; discount?: number; tax?: number }> }) => void }) {
+function InvoiceForm({ products, farms, vendors, customers, handlingCompanies, busy, error, createCustomerError, onCreateCustomer, onSubmit }: {
+  products: Product[];
+  farms: Farm[];
+  vendors: Array<{ _id: string; name: string }>;
+  customers: Party[];
+  handlingCompanies: Array<{ _id: string; name: string }>;
+  busy: boolean;
+  error: string;
+  createCustomerError: string;
+  onCreateCustomer: (data: Omit<Party, '_id' | 'customerDue' | 'customerCredit' | 'supplierPayable' | 'supplierCredit'>) => Promise<Party>;
+  onSubmit: (data: { invoiceType: 'SALES' | 'STOCK_IN'; invoiceDate: string; handlingCompanyId?: string; marketplace?: string; vendorId?: string; customerId?: string; farmId?: string; buyer?: Record<string, string>; remark?: string; items: Array<{ productId: string; quantity: number; rate: number; discount?: number; tax?: number }> }) => void;
+}) {
   const [type, setType] = useState<'SALES' | 'STOCK_IN'>('SALES');
-  function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); const buyer = type === 'SALES' ? { customerName: String(form.get('customerName')).trim(), companyName: String(form.get('buyerCompany')).trim(), mobile: String(form.get('mobile')).trim(), email: String(form.get('email')).trim(), address: String(form.get('address')).trim(), city: String(form.get('city')).trim(), state: String(form.get('state')).trim(), pincode: String(form.get('pincode')).trim(), gstin: String(form.get('gstin')).trim() } : undefined; const farmValue = type === 'SALES' ? String(form.get('farmId') ?? '').trim() : ''; onSubmit({ invoiceType: type, invoiceDate: new Date(`${String(form.get('date'))}T12:00:00`).toISOString(), handlingCompanyId: type === 'SALES' ? String(form.get('handlingCompanyId')) : undefined, marketplace: type === 'SALES' ? String(form.get('marketplace')) : undefined, vendorId: type === 'STOCK_IN' ? String(form.get('vendorId')) : undefined, farmId: farmValue && farmValue !== 'null' ? farmValue : undefined, buyer, remark: String(form.get('remark')).trim() || undefined, items: readProductLines(form, 'invoice') }); }
-  return <form className="form-stack" onSubmit={submit}><div className="segmented-control"><button type="button" className={type === 'SALES' ? 'selected' : ''} onClick={() => setType('SALES')}><ArrowUpRight size={15} /> Sales invoice</button><button type="button" className={type === 'STOCK_IN' ? 'selected' : ''} onClick={() => setType('STOCK_IN')}><ArrowDownLeft size={15} /> Stock-in invoice</button></div><div className="form-grid"><Field label="Invoice date"><input name="date" type="date" required defaultValue={localDate()} /></Field>{type === 'SALES' ? <><Field label="Inventory company"><select name="handlingCompanyId" required defaultValue=""><option value="" disabled>Select company</option>{handlingCompanies.map((company) => <option key={company._id} value={company._id}>{company.name}</option>)}</select></Field><Field label="Marketplace"><select name="marketplace" defaultValue="DIRECT"><option value="DIRECT">Direct</option><option value="AMAZON">Amazon</option><option value="MEESHO">Meesho</option><option value="FLIPKART">Flipkart</option><option value="OTHER">Other</option></select></Field><Field label="Sales company (optional)"><select name="farmId" defaultValue=""><option value="">None</option>{farms.map((farm) => <option key={farm._id} value={farm._id}>{farm.name}</option>)}</select></Field><Field label="Buyer name"><input name="customerName" required /></Field><Field label="Buyer company"><input name="buyerCompany" /></Field><Field label="Mobile"><input name="mobile" /></Field><Field label="Email"><input name="email" type="email" /></Field><Field label="Address"><input name="address" /></Field><Field label="City"><input name="city" /></Field><Field label="State"><input name="state" /></Field><Field label="Pincode"><input name="pincode" /></Field><Field label="GSTIN"><input name="gstin" /></Field></> : <Field label="Supplier"><select name="vendorId" required defaultValue=""><option value="" disabled>Select supplier</option>{vendors.map((vendor) => <option key={vendor._id} value={vendor._id}>{vendor.name}</option>)}</select></Field>}</div><ProductLineFields products={products} prefix="invoice" /><Field label="Remark"><input name="remark" /></Field>{error && <div className="form-error">{error}</div>}<p className="form-hint">{type === 'STOCK_IN' ? 'The inventory company is automatically assigned as stock owner. Saving creates a draft only; finalize it to add the purchased quantities to physical stock.' : 'This saves a draft only. Drafts do not affect stock; finalize from Recent invoices to post stock changes.'}</p><div className="modal-actions"><button className="button button-primary" disabled={busy || !products.length || (type === 'SALES' ? !handlingCompanies.length : !vendors.length)}>{busy ? 'Saving draft…' : 'Save invoice draft'}</button></div></form>;
+  const [customerId, setCustomerId] = useState('');
+  const [quickName, setQuickName] = useState('');
+  const [quickCompany, setQuickCompany] = useState('');
+  const [quickMobile, setQuickMobile] = useState('');
+  const [quickBusy, setQuickBusy] = useState(false);
+  const [quickError, setQuickError] = useState('');
+  const [buyerError, setBuyerError] = useState('');
+  async function addCustomer() {
+    if (!quickName.trim()) { setQuickError('Enter a customer name.'); return; }
+    setQuickError('');
+    setQuickBusy(true);
+    try {
+      const party = await onCreateCustomer({ name: quickName.trim(), companyName: quickCompany.trim() || undefined, mobile: quickMobile.trim() || undefined, isCustomer: true, isSupplier: false, status: 'ACTIVE' });
+      setCustomerId(party._id);
+      setQuickName('');
+      setQuickCompany('');
+      setQuickMobile('');
+    } catch (createError) {
+      setQuickError(mutationErrorMessage(createError, 'Could not create customer.'));
+    } finally {
+      setQuickBusy(false);
+    }
+  }
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const linkedCustomer = customers.find((customer) => customer._id === customerId);
+    const buyer = type === 'SALES' ? {
+      customerName: String(form.get('customerName')).trim() || linkedCustomer?.name || '',
+      companyName: String(form.get('buyerCompany')).trim() || linkedCustomer?.companyName || '',
+      mobile: String(form.get('mobile')).trim() || linkedCustomer?.mobile || '',
+      email: String(form.get('email')).trim() || linkedCustomer?.email || '',
+      address: String(form.get('address')).trim() || linkedCustomer?.address || '',
+      city: String(form.get('city')).trim(),
+      state: String(form.get('state')).trim(),
+      pincode: String(form.get('pincode')).trim(),
+      gstin: String(form.get('gstin')).trim() || linkedCustomer?.gstin || '',
+    } : undefined;
+    if (type === 'SALES' && !buyer?.customerName) {
+      setBuyerError('Enter a buyer name or link a saved customer.');
+      return;
+    }
+    setBuyerError('');
+    const farmValue = type === 'SALES' ? String(form.get('farmId') ?? '').trim() : '';
+    onSubmit({
+      invoiceType: type,
+      invoiceDate: new Date(`${String(form.get('date'))}T12:00:00`).toISOString(),
+      handlingCompanyId: type === 'SALES' ? String(form.get('handlingCompanyId')) : undefined,
+      marketplace: type === 'SALES' ? String(form.get('marketplace')) : undefined,
+      vendorId: type === 'STOCK_IN' ? String(form.get('vendorId')) : undefined,
+      customerId: type === 'SALES' ? customerId || undefined : undefined,
+      farmId: farmValue && farmValue !== 'null' ? farmValue : undefined,
+      buyer,
+      remark: String(form.get('remark')).trim() || undefined,
+      items: readProductLines(form, 'invoice'),
+    });
+  }
+  return <form className="form-stack" onSubmit={submit}>
+    <div className="segmented-control"><button type="button" className={type === 'SALES' ? 'selected' : ''} onClick={() => setType('SALES')}><ArrowUpRight size={15} /> Sales invoice</button><button type="button" className={type === 'STOCK_IN' ? 'selected' : ''} onClick={() => setType('STOCK_IN')}><ArrowDownLeft size={15} /> Stock-in invoice</button></div>
+    <div className="form-grid">
+      <Field label="Invoice date"><input name="date" type="date" required defaultValue={localDate()} /></Field>
+      {type === 'SALES' ? <>
+        <Field label="Inventory company"><select name="handlingCompanyId" required defaultValue=""><option value="" disabled>Select company</option>{handlingCompanies.map((company) => <option key={company._id} value={company._id}>{company.name}</option>)}</select></Field>
+        <Field label="Marketplace"><select name="marketplace" defaultValue="DIRECT"><option value="DIRECT">Direct</option><option value="AMAZON">Amazon</option><option value="MEESHO">Meesho</option><option value="FLIPKART">Flipkart</option><option value="OTHER">Other</option></select></Field>
+        <Field label="Sales company (optional)"><select name="farmId" defaultValue=""><option value="">None</option>{farms.map((farm) => <option key={farm._id} value={farm._id}>{farm.name}</option>)}</select></Field>
+        <Field label="Link customer account (optional)"><select value={customerId} onChange={(event) => setCustomerId(event.target.value)}><option value="">Do not link to a customer account</option>{customers.map((customer) => <option key={customer._id} value={customer._id}>{customer.name}{customer.companyName ? ` · ${customer.companyName}` : ''}</option>)}</select></Field>
+        <Field label="Buyer name / invoice snapshot"><input name="customerName" /></Field><Field label="Buyer company"><input name="buyerCompany" /></Field><Field label="Mobile"><input name="mobile" /></Field><Field label="Email"><input name="email" type="email" /></Field><Field label="Address"><input name="address" /></Field><Field label="City"><input name="city" /></Field><Field label="State"><input name="state" /></Field><Field label="Pincode"><input name="pincode" /></Field><Field label="GSTIN"><input name="gstin" /></Field>
+      </> : <Field label="Supplier"><select name="vendorId" required defaultValue=""><option value="" disabled>Select supplier</option>{vendors.map((vendor) => <option key={vendor._id} value={vendor._id}>{vendor.name}</option>)}</select></Field>}
+    </div>
+    {type === 'SALES' && <div className="invoice-quick-customer"><strong>Create a customer without losing this invoice</strong><div className="form-grid"><Field label="Customer name"><input value={quickName} onChange={(event) => setQuickName(event.target.value)} /></Field><Field label="Company"><input value={quickCompany} onChange={(event) => setQuickCompany(event.target.value)} /></Field><Field label="Mobile"><input value={quickMobile} onChange={(event) => setQuickMobile(event.target.value)} /></Field><button type="button" className="button button-outline" onClick={() => void addCustomer()} disabled={quickBusy}>{quickBusy ? 'Creating…' : 'Create & link customer'}</button></div>{(quickError || createCustomerError) && <div className="form-error">{quickError || createCustomerError}</div>}</div>}
+    <ProductLineFields products={products} prefix="invoice" /><Field label="Remark"><input name="remark" /></Field>{buyerError && <div className="form-error">{buyerError}</div>}{error && <div className="form-error">{error}</div>}
+    <p className="form-hint">{type === 'STOCK_IN' ? 'The inventory company is automatically assigned as stock owner. Saving creates a draft only; finalize it to add the purchased quantities to physical stock.' : 'This saves a draft only. Drafts do not affect stock; finalize from Recent invoices to post stock changes. Buyer details are saved as a snapshot even when linked to a customer profile.'}</p>
+    <div className="modal-actions"><button className="button button-primary" disabled={busy || !products.length || (type === 'SALES' ? !handlingCompanies.length : !vendors.length)}>{busy ? 'Saving draft…' : 'Save invoice draft'}</button></div>
+  </form>;
 }
 
 function localDate(date = new Date()) { return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10); }
@@ -667,7 +788,7 @@ function getDateRange(preset: DatePreset, customFrom: string, customTo: string) 
   return { from: from.toISOString(), to: to.toISOString(), label, shortLabel };
 }
 
-function SalesBatchForm({ products, farms, busy, error, onSubmit }: { products: Product[]; farms: Farm[]; busy: boolean; error: string; onSubmit: (data: { farmId?: string; salesDate: string; marketplace: 'AMAZON' | 'MEESHO' | 'FLIPKART' | 'OTHER' | 'DIRECT'; customerName?: string; customerCompany?: string; reference?: string; notes?: string; items: Array<{ productId: string; quantity: number }> }) => void }) {
+function SalesBatchForm({ products, farms, customers, busy, error, onSubmit }: { products: Product[]; farms: Farm[]; customers: Party[]; busy: boolean; error: string; onSubmit: (data: { farmId?: string; salesDate: string; marketplace: 'AMAZON' | 'MEESHO' | 'FLIPKART' | 'OTHER' | 'DIRECT'; customerId?: string; customerName?: string; customerCompany?: string; reference?: string; notes?: string; items: Array<{ productId: string; quantity: number }> }) => void }) {
   const [lineIds, setLineIds] = useState([0]);
   const [marketplace, setMarketplace] = useState<'AMAZON' | 'MEESHO' | 'FLIPKART' | 'OTHER' | 'DIRECT'>('MEESHO');
   const lineCount = lineIds.length;
@@ -683,6 +804,7 @@ function SalesBatchForm({ products, farms, busy, error, onSubmit }: { products: 
       farmId: String(form.get('farmId') ?? '').trim() || undefined,
       salesDate: new Date(`${String(form.get('salesDate'))}T12:00:00`).toISOString(),
       marketplace,
+      customerId: marketplace === 'DIRECT' ? String(form.get('customerId')).trim() || undefined : undefined,
       customerName: marketplace === 'DIRECT' ? String(form.get('customerName')).trim() || undefined : undefined,
       customerCompany: marketplace === 'DIRECT' ? String(form.get('customerCompany')).trim() || undefined : undefined,
       reference: String(form.get('reference')).trim() || undefined,
@@ -691,7 +813,7 @@ function SalesBatchForm({ products, farms, busy, error, onSubmit }: { products: 
     });
   }
   return <form className="form-stack" onSubmit={submit}>
-    <div className="form-grid"><Field label="Sales date"><input name="salesDate" type="date" required defaultValue={defaultDate} /></Field><Field label="Marketplace"><select name="marketplace" value={marketplace} onChange={(event) => setMarketplace(event.target.value as typeof marketplace)}><option value="AMAZON">Amazon</option><option value="MEESHO">Meesho</option><option value="FLIPKART">Flipkart</option><option value="DIRECT">Direct / offline</option></select></Field>{marketplace !== 'DIRECT' && <Field label="Farm / location (optional)"><select name="farmId" defaultValue=""><option value="">No farm selected</option>{farms.map((farm) => <option key={farm._id} value={farm._id}>{farm.name}</option>)}</select></Field>}<Field label="Batch / order reference"><input name="reference" maxLength={100} placeholder="Optional settlement or export reference" /></Field>{marketplace === 'DIRECT' && <><Field label="Customer name (optional)"><input name="customerName" maxLength={120} placeholder="Person who purchased" /></Field><Field label="Company name (optional)"><input name="customerCompany" maxLength={120} placeholder="Customer’s company" /></Field></>}</div>
+    <div className="form-grid"><Field label="Sales date"><input name="salesDate" type="date" required defaultValue={defaultDate} /></Field><Field label="Marketplace"><select name="marketplace" value={marketplace} onChange={(event) => setMarketplace(event.target.value as typeof marketplace)}><option value="AMAZON">Amazon</option><option value="MEESHO">Meesho</option><option value="FLIPKART">Flipkart</option><option value="DIRECT">Direct / offline</option></select></Field>{marketplace !== 'DIRECT' && <Field label="Farm / location (optional)"><select name="farmId" defaultValue=""><option value="">No farm selected</option>{farms.map((farm) => <option key={farm._id} value={farm._id}>{farm.name}</option>)}</select></Field>}<Field label="Batch / order reference"><input name="reference" maxLength={100} placeholder="Optional settlement or export reference" /></Field>{marketplace === 'DIRECT' && <><Field label="Party / customer (optional)"><select name="customerId" defaultValue=""><option value="">No linked party</option>{customers.map((customer) => <option key={customer._id} value={customer._id}>{customer.name}{customer.companyName ? ` · ${customer.companyName}` : ''}</option>)}</select></Field><Field label="Customer name (optional)"><input name="customerName" maxLength={120} placeholder="Person who purchased" /></Field><Field label="Company name (optional)"><input name="customerCompany" maxLength={120} placeholder="Customer’s company" /></Field><small className="sales-party-hint">Selecting a party records who bought the batch; it does not create a customer invoice or ledger balance.</small></>}</div>
     <div className="batch-items-heading"><div><strong>Products sold</strong><small>Enter each SKU once with its total quantity for this batch.</small></div><span>{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span></div>
     <div className="batch-lines">{lineIds.map((lineId, index) => <div className="batch-line" key={lineId}><span className="batch-line-number">{String(index + 1).padStart(2, '0')}</span><select name={`product-${lineId}`} required aria-label={`Product ${index + 1}`} defaultValue=""><option value="" disabled>Choose SKU / product</option>{products.filter((product) => product.status === 'ACTIVE').map((product) => <option key={product._id} value={product._id}>{product.sku} · {product.name}</option>)}</select><input name={`quantity-${lineId}`} type="number" min="0.000001" step="any" required placeholder="Qty" aria-label={`Quantity ${index + 1}`} />{lineCount > 1 && <button className="batch-remove" type="button" aria-label={`Remove line ${index + 1}`} onClick={() => setLineIds((ids) => ids.filter((id) => id !== lineId))}><X size={15} /></button>}</div>)}</div>
     <button className="batch-add-line" type="button" onClick={() => setLineIds((ids) => [...ids, Math.max(...ids) + 1])} disabled={lineCount >= 30}><Plus size={14} /> Add product line</button>

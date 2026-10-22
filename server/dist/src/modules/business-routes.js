@@ -2,9 +2,9 @@ import { Router } from 'express';
 import { Types } from 'mongoose';
 import PDFDocument from 'pdfkit';
 import { z } from 'zod';
-import { Company, Expense, Farm, FarmMoneyTransaction, Invoice, Product, Purchase, SalesBatch, Vendor, VendorPayment } from '../models/inventory.js';
+import { Company, CustomerReceipt, Expense, Farm, FarmMoneyTransaction, Invoice, Product, Purchase, SalesBatch, Vendor, VendorPayment } from '../models/inventory.js';
 import { AppError } from '../middleware/errors.js';
-import { cancelInvoice, createInvoiceDraft, farmMoneyMonthly, farmMoneySummary, finalizeInvoice, finalizePurchase, getVendorLedger, getVendorOutstanding, recordFarmMoney, recordPurchase, recordVendorPayment, updateFarmMoneyReceipt } from './business-service.js';
+import { cancelInvoice, createInvoiceDraft, farmMoneyMonthly, farmMoneySummary, finalizeInvoice, finalizePurchase, getCustomerLedger, getVendorLedger, getVendorOutstanding, recordCustomerReceipt, recordFarmMoney, recordPurchase, recordVendorPayment, updateFarmMoneyReceipt } from './business-service.js';
 const id = z.string().regex(/^[a-f\d]{24}$/i);
 const date = z.string().datetime();
 const optionalId = z.preprocess((value) => {
@@ -33,12 +33,12 @@ businessRouter.patch('/handling-companies/:id', async (request, response) => {
         throw new AppError('Handling company not found', 404, 'COMPANY_NOT_FOUND');
     response.json({ success: true, data: company });
 });
-businessRouter.get('/vendors', async (_request, response) => response.json({ success: true, data: await Vendor.find({ status: 'ACTIVE' }).sort({ name: 1 }).lean() }));
+businessRouter.get('/vendors', async (_request, response) => response.json({ success: true, data: await Vendor.find({ status: 'ACTIVE', isSupplier: { $ne: false } }).sort({ name: 1 }).lean() }));
 businessRouter.post('/vendors', async (request, response) => {
-    const parsed = z.object({ name: z.string().trim().min(2).max(120), companyName: z.string().trim().max(120).optional(), mobile: z.string().trim().max(30).optional(), email: z.string().email().optional(), address: z.string().trim().max(500).optional() }).safeParse(request.body);
+    const parsed = z.object({ name: z.string().trim().min(2).max(120), companyName: z.string().trim().max(120).optional(), mobile: z.string().trim().max(30).optional(), email: z.string().email().optional(), address: z.string().trim().max(500).optional(), gstin: z.string().trim().max(30).optional(), notes: z.string().trim().max(1000).optional() }).safeParse(request.body);
     if (!parsed.success)
         throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid vendor', 400, 'VALIDATION_ERROR');
-    response.status(201).json({ success: true, data: await Vendor.create(parsed.data) });
+    response.status(201).json({ success: true, data: await Vendor.create({ ...parsed.data, isSupplier: true }) });
 });
 businessRouter.get('/vendors/outstanding', async (_request, response) => response.json({ success: true, data: await getVendorOutstanding() }));
 businessRouter.get('/vendors/:id/outstanding', async (request, response) => {
@@ -52,9 +52,125 @@ businessRouter.get('/vendors/:id/outstanding', async (request, response) => {
 businessRouter.get('/vendors/:id/ledger', async (request, response) => {
     if (!id.safeParse(request.params.id).success)
         throw new AppError('Invalid vendor id', 400, 'VALIDATION_ERROR');
-    const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
-    const limit = Math.min(Math.max(Math.floor(Number(request.query.limit) || 20), 1), 100);
-    response.json({ success: true, data: await getVendorLedger(request.params.id, page, limit) });
+    const parsed = z.object({ from: date.optional(), to: date.optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) }).safeParse(request.query);
+    if (!parsed.success)
+        throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid ledger filters', 400, 'VALIDATION_ERROR');
+    if (parsed.data.from && parsed.data.to && new Date(parsed.data.from) > new Date(parsed.data.to))
+        throw new AppError('From date must not be after to date', 400, 'VALIDATION_ERROR');
+    response.json({ success: true, data: await getVendorLedger(request.params.id, parsed.data.page, parsed.data.limit, parsed.data.from ? new Date(parsed.data.from) : undefined, parsed.data.to ? new Date(parsed.data.to) : undefined) });
+});
+const partyInputFields = z.object({
+    name: z.string().trim().min(1).max(120),
+    companyName: z.string().trim().max(120).optional(),
+    mobile: z.string().trim().max(30).optional(),
+    email: z.union([z.string().email(), z.literal('')]).optional(),
+    address: z.string().trim().max(500).optional(),
+    gstin: z.string().trim().max(30).optional(),
+    notes: z.string().trim().max(1000).optional(),
+    isCustomer: z.boolean(),
+    isSupplier: z.boolean(),
+    status: z.enum(['ACTIVE', 'INACTIVE']).default('ACTIVE'),
+});
+const partyInput = partyInputFields.refine((party) => party.isCustomer || party.isSupplier, { message: 'Select at least one party role' });
+businessRouter.get('/parties', async (request, response) => {
+    const parsed = z.object({ role: z.enum(['CUSTOMER', 'SUPPLIER', 'ALL']).default('ALL'), status: z.enum(['ACTIVE', 'INACTIVE', 'ALL']).default('ACTIVE'), search: z.string().trim().max(120).optional() }).safeParse(request.query);
+    if (!parsed.success)
+        throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid party filters', 400, 'VALIDATION_ERROR');
+    const { role, status, search } = parsed.data;
+    const filter = {
+        ...(status === 'ALL' ? {} : { status }),
+        ...(role === 'CUSTOMER' ? { isCustomer: true } : role === 'SUPPLIER' ? { isSupplier: { $ne: false } } : {}),
+        ...(search ? { $or: ['name', 'companyName', 'mobile', 'email'].map((field) => ({ [field]: new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })) } : {}),
+    };
+    const [parties, supplierBalances, customerInvoices, customerReceipts] = await Promise.all([
+        Vendor.find(filter).sort({ name: 1 }).lean(),
+        getVendorOutstanding(true),
+        Invoice.aggregate([{ $match: { invoiceType: 'SALES', status: 'FINALIZED', customerId: { $ne: null } } }, { $group: { _id: '$customerId', total: { $sum: '$grandTotal' } } }]),
+        CustomerReceipt.aggregate([{ $group: { _id: '$customerId', total: { $sum: '$amount' } } }]),
+    ]);
+    const payableByParty = new Map(supplierBalances.map((row) => [row.vendor._id.toString(), row.outstanding]));
+    const invoiceByParty = new Map(customerInvoices.map((row) => [row._id.toString(), row.total]));
+    const receiptByParty = new Map(customerReceipts.map((row) => [row._id.toString(), row.total]));
+    response.json({
+        success: true,
+        data: parties.map((party) => {
+            const partyId = party._id.toString();
+            const customerBalance = (invoiceByParty.get(partyId) ?? 0) - (receiptByParty.get(partyId) ?? 0);
+            return {
+                ...party,
+                customerDue: Math.max(customerBalance, 0),
+                customerCredit: Math.max(-customerBalance, 0),
+                supplierPayable: Math.max(payableByParty.get(partyId) ?? 0, 0),
+                supplierCredit: Math.max(-(payableByParty.get(partyId) ?? 0), 0),
+            };
+        }),
+    });
+});
+businessRouter.post('/parties', async (request, response) => {
+    const parsed = partyInput.safeParse(request.body);
+    if (!parsed.success)
+        throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid party', 400, 'VALIDATION_ERROR');
+    response.status(201).json({ success: true, data: await Vendor.create(parsed.data) });
+});
+businessRouter.patch('/parties/:id', async (request, response) => {
+    if (!id.safeParse(request.params.id).success)
+        throw new AppError('Invalid party id', 400, 'VALIDATION_ERROR');
+    const parsed = partyInputFields.partial().safeParse(request.body);
+    if (!parsed.success)
+        throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid party update', 400, 'VALIDATION_ERROR');
+    const party = await Vendor.findById(request.params.id);
+    if (!party)
+        throw new AppError('Party not found', 404, 'PARTY_NOT_FOUND');
+    const nextCustomerRole = parsed.data.isCustomer ?? party.isCustomer;
+    const nextSupplierRole = parsed.data.isSupplier ?? party.isSupplier;
+    if (!nextCustomerRole && !nextSupplierRole)
+        throw new AppError('Select at least one party role', 400, 'VALIDATION_ERROR');
+    if (party.isCustomer && !nextCustomerRole) {
+        const hasCustomerHistory = await Invoice.exists({ customerId: party._id, invoiceType: 'SALES', status: 'FINALIZED' })
+            || await CustomerReceipt.exists({ customerId: party._id })
+            || await SalesBatch.exists({ customerId: party._id, marketplace: 'DIRECT' });
+        if (hasCustomerHistory)
+            throw new AppError('Customer role cannot be removed while account history exists', 409, 'PARTY_ROLE_HAS_HISTORY');
+    }
+    if (party.isSupplier && !nextSupplierRole) {
+        const hasSupplierHistory = await Purchase.exists({ vendorId: party._id, status: 'FINALIZED' })
+            || await Invoice.exists({ vendorId: party._id, invoiceType: 'STOCK_IN', status: 'FINALIZED' })
+            || await VendorPayment.exists({ vendorId: party._id });
+        if (hasSupplierHistory)
+            throw new AppError('Supplier role cannot be removed while account history exists', 409, 'PARTY_ROLE_HAS_HISTORY');
+    }
+    party.set(parsed.data);
+    await party.save();
+    response.json({ success: true, data: party });
+});
+businessRouter.get('/parties/:id/ledger', async (request, response) => {
+    if (!id.safeParse(request.params.id).success)
+        throw new AppError('Invalid party id', 400, 'VALIDATION_ERROR');
+    const parsed = z.object({ role: z.enum(['CUSTOMER', 'SUPPLIER']), from: date.optional(), to: date.optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) }).safeParse(request.query);
+    if (!parsed.success)
+        throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid ledger filters', 400, 'VALIDATION_ERROR');
+    if (parsed.data.from && parsed.data.to && new Date(parsed.data.from) > new Date(parsed.data.to))
+        throw new AppError('From date must not be after to date', 400, 'VALIDATION_ERROR');
+    const { from, to, page, limit, role } = parsed.data;
+    const ledger = role === 'CUSTOMER'
+        ? await getCustomerLedger(request.params.id, page, limit, from ? new Date(from) : undefined, to ? new Date(to) : undefined)
+        : await getVendorLedger(request.params.id, page, limit, from ? new Date(from) : undefined, to ? new Date(to) : undefined, true);
+    response.json({ success: true, data: ledger });
+});
+businessRouter.get('/customer-receipts', async (_request, response) => response.json({ success: true, data: await CustomerReceipt.find().populate('customerId', 'name companyName').sort({ receiptDate: -1, _id: -1 }).limit(300).lean() }));
+businessRouter.post('/customer-receipts', async (request, response) => {
+    const parsed = z.object({
+        customerId: id,
+        receiptDate: date,
+        amount: z.number().positive(),
+        paymentMethod: z.enum(['CASH', 'BANK', 'UPI', 'OTHER']).optional(),
+        referenceNumber: z.string().trim().max(100).optional(),
+        remark: z.string().trim().max(500).optional(),
+        idempotencyKey: z.string().trim().min(1).max(100).optional(),
+    }).safeParse(request.body);
+    if (!parsed.success)
+        throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid customer receipt', 400, 'VALIDATION_ERROR');
+    response.status(201).json({ success: true, data: await recordCustomerReceipt(parsed.data) });
 });
 const purchaseInput = z.object({ purchaseDate: date, vendorId: id, taxCharges: z.number().min(0).optional(), remark: z.string().trim().max(1000).optional(), items: lineItems });
 businessRouter.get('/purchases', async (_request, response) => response.json({ success: true, data: await Purchase.find().populate('vendorId', 'name companyName').sort({ purchaseDate: -1 }).limit(200).lean() }));
@@ -178,7 +294,7 @@ businessRouter.post('/expenses', async (request, response) => {
     response.status(201).json({ success: true, data: expense });
 });
 const invoiceInput = z.object({
-    invoiceType: z.enum(['SALES', 'STOCK_IN']), invoiceDate: date, handlingCompanyId: id.optional(), marketplace: z.enum(['DIRECT', 'AMAZON', 'MEESHO', 'FLIPKART', 'OTHER']).optional(), vendorId: id.optional(), farmId: optionalId,
+    invoiceType: z.enum(['SALES', 'STOCK_IN']), invoiceDate: date, handlingCompanyId: id.optional(), marketplace: z.enum(['DIRECT', 'AMAZON', 'MEESHO', 'FLIPKART', 'OTHER']).optional(), vendorId: id.optional(), customerId: optionalId, farmId: optionalId,
     buyer: z.record(z.string()).optional(), discount: z.number().min(0).optional(), tax: z.number().min(0).optional(), remark: z.string().trim().max(1000).optional(), items: lineItems,
 });
 businessRouter.get('/invoices', async (request, response) => {
@@ -194,12 +310,14 @@ businessRouter.post('/invoices', async (request, response) => {
         throw new AppError('Handling company not found', 404, 'COMPANY_NOT_FOUND');
     if (parsed.data.vendorId && !await Vendor.exists({ _id: parsed.data.vendorId, status: 'ACTIVE' }))
         throw new AppError('Vendor not found', 404, 'VENDOR_NOT_FOUND');
+    if (parsed.data.customerId && !await Vendor.exists({ _id: parsed.data.customerId, status: 'ACTIVE', isCustomer: true }))
+        throw new AppError('Customer not found or inactive', 404, 'CUSTOMER_NOT_FOUND');
     if (parsed.data.farmId && !await Farm.exists({ _id: parsed.data.farmId, status: 'ACTIVE' }))
         throw new AppError('Farm not found', 404, 'FARM_NOT_FOUND');
     response.status(201).json({ success: true, data: await createInvoiceDraft(parsed.data) });
 });
 businessRouter.get('/invoices/:id', async (request, response) => {
-    const invoice = id.safeParse(request.params.id).success ? await Invoice.findById(request.params.id).populate('handlingCompanyId vendorId farmId').lean() : null;
+    const invoice = id.safeParse(request.params.id).success ? await Invoice.findById(request.params.id).populate('handlingCompanyId vendorId customerId farmId').lean() : null;
     if (!invoice)
         throw new AppError('Invoice not found', 404, 'INVOICE_NOT_FOUND');
     response.json({ success: true, data: invoice });
@@ -274,11 +392,27 @@ businessRouter.patch('/invoices/:id', async (request, response) => {
     const invoice = await Invoice.findOne({ _id: request.params.id, status: 'DRAFT' });
     if (!invoice)
         throw new AppError('Draft invoice not found', 404, 'DRAFT_INVOICE_NOT_FOUND');
-    const parsed = z.object({ remark: z.string().trim().max(1000).optional(), invoiceDate: date.optional(), buyer: z.record(z.string()).optional() }).safeParse(request.body);
+    const parsed = z.object({ remark: z.string().trim().max(1000).optional(), invoiceDate: date.optional(), buyer: z.record(z.string()).optional(), customerId: optionalId }).safeParse(request.body);
     if (!parsed.success)
         throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid invoice update', 400, 'VALIDATION_ERROR');
+    if (parsed.data.customerId && (!invoice.invoiceType || invoice.invoiceType !== 'SALES' || !await Vendor.exists({ _id: parsed.data.customerId, status: 'ACTIVE', isCustomer: true })))
+        throw new AppError('Active customer not found', 404, 'CUSTOMER_NOT_FOUND');
     invoice.set(parsed.data);
     await invoice.save();
+    response.json({ success: true, data: invoice });
+});
+businessRouter.patch('/invoices/:id/customer', async (request, response) => {
+    if (!id.safeParse(request.params.id).success)
+        throw new AppError('Invalid invoice id', 400, 'VALIDATION_ERROR');
+    const parsed = z.object({ customerId: id }).safeParse(request.body);
+    if (!parsed.success)
+        throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid customer link', 400, 'VALIDATION_ERROR');
+    const customerExists = await Vendor.exists({ _id: parsed.data.customerId, status: 'ACTIVE', isCustomer: true });
+    if (!customerExists)
+        throw new AppError('Customer not found or inactive', 404, 'CUSTOMER_NOT_FOUND');
+    const invoice = await Invoice.findOneAndUpdate({ _id: request.params.id, invoiceType: 'SALES', status: { $in: ['DRAFT', 'FINALIZED'] } }, { $set: { customerId: parsed.data.customerId } }, { new: true, runValidators: true }).populate('customerId', 'name companyName');
+    if (!invoice)
+        throw new AppError('Sales invoice not found or is not linkable', 404, 'INVOICE_NOT_FOUND');
     response.json({ success: true, data: invoice });
 });
 businessRouter.post('/invoices/:id/finalize', async (request, response) => {
