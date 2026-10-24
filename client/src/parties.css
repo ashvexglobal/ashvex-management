@@ -49,3 +49,162 @@
 .party-ledger-modal .ledger-running-balance{display:flex;justify-content:space-between}
 .party-ledger-modal .ledger-running-balance strong{color:#345d47}
 @media(max-width:760px){.parties-toolbar{align-items:stretch;flex-direction:column}.parties-toolbar .search-field{max-width:none}.party-ledger-toolbar{align-items:stretch;flex-wrap:wrap}.party-ledger-toolbar .form-field{flex:1;min-width:130px}.party-ledger-toolbar .button{margin-left:0}.party-product-totals{grid-template-columns:1fr}.party-modal-backdrop{padding:10px}.party-modal{padding:15px}.parties-table{min-width:820px}}
+
+.parties-panel {
+  padding: 22px;
+}
+
+.parties-head {
+  margin-bottom: 20px;
+}
+
+.parties-table th {
+  padding: 14px 16px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.parties-table td {
+  padding: 16px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.parties-table td > strong {
+  color: #1e293b;
+  font-size: 14px;
+}
+
+.parties-table td > small,
+.party-balances small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.party-role-tags span {
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 11px;
+}
+
+.party-balances strong {
+  color: #3730a3;
+}
+
+.party-actions {
+  gap: 12px;
+}
+
+.party-actions .text-button {
+  font-size: 11px;
+}
+
+.party-edit {
+  width: 36px;
+  height: 36px;
+  border-color: #e2e8f0;
+  border-radius: 8px;
+  color: #475569;
+}
+
+.party-edit:hover {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.parties-empty {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.parties-empty strong {
+  color: #1e293b;
+  font-size: 15px;
+}
+
+.party-modal {
+  padding: 24px;
+  border-color: #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+
+.party-modal .modal-head {
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.party-modal .modal-head h2 {
+  color: #1e293b;
+  font-size: 22px;
+}
+
+.party-modal textarea {
+  border-color: #cbd5e1;
+  border-radius: 9px;
+  font: inherit;
+}
+
+.party-role-options label {
+  min-height: 40px;
+  color: #334155;
+  font-size: 13px;
+}
+
+.party-role-options input {
+  accent-color: #4f46e5;
+}
+
+.party-modal .modal-actions {
+  padding-top: 6px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.party-ledger-toolbar .form-field {
+  width: 200px;
+}
+
+.party-product-totals section {
+  border-color: #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.party-product-totals strong {
+  color: #1e293b;
+  font-size: 13px;
+}
+
+.party-product-totals span,
+.party-product-totals small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+@media(max-width:760px) {
+  .parties-panel {
+    padding: 16px;
+  }
+
+  .party-modal {
+    padding: 18px;
+  }
+}
+
+@media(max-width:460px) {
+  .parties-panel {
+    padding: 13px;
+  }
+
+  .parties-head {
+    align-items: flex-start;
+  }
+
+  .party-modal {
+    padding: 15px;
+  }
+}

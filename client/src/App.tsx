@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import axios from 'axios';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownLeft, ArrowUpRight, Boxes, CircleAlert, Clock3, Command, Download, Eye, Leaf, MapPin, Minus, PackagePlus, Plus, Search, Sprout, Users, Wallet, Warehouse, X } from 'lucide-react';
 import { api, type Farm, type FarmMoneyMonth, type FarmMoneyTransaction, type Party, type Product, type StockRow, type VendorLedger } from './lib/api';
 import PartiesWorkspace from './PartiesWorkspace';
 
+const MonthlySalesChart = lazy(() => import('./MonthlySalesChart'));
+const CompanyPerformanceChart = lazy(() => import('./CompanyPerformanceChart'));
+const ProductUnitsChart = lazy(() => import('./ProductUnitsChart'));
 const money = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
 const quantity = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 });
 
@@ -16,6 +19,7 @@ function mutationErrorMessage(error: unknown, fallback: string) {
 type ModalName = 'company' | 'product' | 'farm' | 'movement' | 'sales' | 'purchase' | 'vendor' | 'payment' | 'farmMoney' | 'invoice' | 'expense' | null;
 type DatePreset = 'TODAY' | 'YESTERDAY' | 'THIS_WEEK' | 'THIS_MONTH' | 'LAST_MONTH' | 'LAST_6_MONTHS' | 'THIS_YEAR' | 'CUSTOM';
 type WorkspaceTab = 'dashboard' | 'stock' | 'sales' | 'parties' | 'vendors' | 'farms' | 'cashflow' | 'expenses';
+type DashboardChartPeriod = 'TODAY' | 'YESTERDAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS' | 'THIS_MONTH' | 'LAST_3_MONTHS' | 'LAST_6_MONTHS' | 'THIS_YEAR' | 'TILL_NOW';
 type FarmMoneyInput = { date: string; transactionType: 'FARM_RECEIPT' | 'WITHDRAWAL'; farmId?: string; marketplace?: 'MEESHO' | 'AMAZON' | 'FLIPKART' | 'OTHER'; amount: number; bankAccount?: string; reference?: string; remark?: string };
 
 const workspaceTabs: Array<{ id: Exclude<WorkspaceTab, 'expenses'>; label: string; icon: ReactNode }> = [
@@ -28,12 +32,27 @@ const workspaceTabs: Array<{ id: Exclude<WorkspaceTab, 'expenses'>; label: strin
   { id: 'cashflow', label: 'Payouts & Cash', icon: <Wallet size={16} /> },
 ];
 
+const dashboardChartPeriods: Array<{ value: DashboardChartPeriod; label: string }> = [
+  { value: 'TODAY', label: 'Today' },
+  { value: 'YESTERDAY', label: 'Yesterday' },
+  { value: 'LAST_7_DAYS', label: 'Last 7 days' },
+  { value: 'LAST_30_DAYS', label: 'Last 30 days' },
+  { value: 'THIS_MONTH', label: 'This month' },
+  { value: 'LAST_3_MONTHS', label: 'Last 3 months' },
+  { value: 'LAST_6_MONTHS', label: 'Last 6 months' },
+  { value: 'THIS_YEAR', label: 'This year' },
+  { value: 'TILL_NOW', label: 'Till now' },
+];
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('dashboard');
   const [search, setSearch] = useState('');
   const [productPage, setProductPage] = useState(1);
   const [vendorPage, setVendorPage] = useState(1);
   const [datePreset, setDatePreset] = useState<DatePreset>('TODAY');
+  const [salesTrendPeriod, setSalesTrendPeriod] = useState<DashboardChartPeriod>('LAST_7_DAYS');
+  const [productSalesPeriod, setProductSalesPeriod] = useState<DashboardChartPeriod>('LAST_7_DAYS');
+  const [companyPerformancePeriod, setCompanyPerformancePeriod] = useState<DashboardChartPeriod>('LAST_7_DAYS');
   const [customFrom, setCustomFrom] = useState(localDate());
   const [customTo, setCustomTo] = useState(localDate());
   const [salesFarmFilter, setSalesFarmFilter] = useState('');
@@ -58,7 +77,56 @@ export default function App() {
     if (!companyId && companies.data?.[0]) setCompanyId(companies.data[0]._id);
   }, [companyId, companies.data]);
   const dateRange = getDateRange(datePreset, customFrom, customTo);
+  const salesTrendRange = useMemo(() => getDashboardChartRange(salesTrendPeriod), [salesTrendPeriod]);
+  const productSalesRange = useMemo(() => getDashboardChartRange(productSalesPeriod), [productSalesPeriod]);
+  const companyPerformanceRange = useMemo(() => getDashboardChartRange(companyPerformancePeriod), [companyPerformancePeriod]);
+  const companyPerformanceDays = companyPerformanceRange.daysInPeriod;
+  const salesTrendGranularity = ['THIS_MONTH', 'LAST_3_MONTHS', 'LAST_6_MONTHS', 'THIS_YEAR', 'TILL_NOW'].includes(salesTrendPeriod) ? 'month' : 'day';
   const summary = useQuery({ queryKey: ['summary', dateRange.from, dateRange.to, companyId], queryFn: () => api.dashboard(dateRange.from, dateRange.to, companyId || undefined) });
+  const salesTrend = useQuery({
+    queryKey: ['sales-trend', salesTrendGranularity, salesTrendRange.from, salesTrendRange.to, companyId],
+    queryFn: () => api.salesTrend(salesTrendRange.from, salesTrendRange.to, salesTrendGranularity, companyId || undefined),
+    enabled: activeTab === 'dashboard' && Boolean(companyId),
+  });
+  const productSales = useQuery({
+    queryKey: ['product-sales-ranking', productSalesPeriod, productSalesRange.from, productSalesRange.to, companyId],
+    queryFn: () => api.dailySales({ from: productSalesRange.from, to: productSalesRange.to, handlingCompanyId: companyId || undefined }),
+    enabled: activeTab === 'dashboard' && Boolean(companyId),
+  });
+  const productSalesRanking = useMemo(
+    () => [...(productSales.data ?? [])].sort((left, right) => right.quantity - left.quantity).slice(0, 10)
+      .map((item) => ({ productName: item.productName, sku: item.sku, units: item.quantity })),
+    [productSales.data],
+  );
+  const companyPerformance = useQuery({
+    queryKey: ['company-performance', companyPerformanceRange.from, companyPerformanceRange.to, companyId],
+    queryFn: () => api.companyPerformance(companyPerformanceRange.from, companyPerformanceRange.to, companyId || undefined),
+    enabled: activeTab === 'dashboard' && Boolean(companyId),
+  });
+  const salesTrendChart = useMemo(() => {
+    const firstRecordedPeriod = salesTrendPeriod === 'TILL_NOW' ? salesTrend.data?.[0]?.period : undefined;
+    const chartStartYear = firstRecordedPeriod ? Number(firstRecordedPeriod.slice(0, 4)) : salesTrendRange.startYear;
+    const chartStartMonth = firstRecordedPeriod ? Number(firstRecordedPeriod.slice(5, 7)) - 1 : salesTrendRange.startMonth;
+    const chartStartDay = firstRecordedPeriod ? Number(firstRecordedPeriod.slice(8, 10)) : salesTrendRange.startDay;
+    const chartCount = firstRecordedPeriod && salesTrendGranularity === 'month'
+      ? (new Date().getFullYear() - chartStartYear) * 12 + new Date().getMonth() - chartStartMonth + 1
+      : salesTrendPeriod === 'TILL_NOW' ? 0 : salesTrendRange.count;
+    const unitsByPeriod = new Map(salesTrend.data?.map((item) => [item.period, item.units]));
+    return Array.from({ length: chartCount }, (_, index) => {
+      const periodDate = salesTrendGranularity === 'day'
+        ? new Date(chartStartYear, chartStartMonth, chartStartDay + index)
+        : new Date(chartStartYear, chartStartMonth + index, 1);
+      const key = salesTrendGranularity === 'day'
+        ? `${periodDate.getFullYear()}-${String(periodDate.getMonth() + 1).padStart(2, '0')}-${String(periodDate.getDate()).padStart(2, '0')}`
+        : `${periodDate.getFullYear()}-${String(periodDate.getMonth() + 1).padStart(2, '0')}`;
+      return {
+        label: salesTrendGranularity === 'day'
+          ? new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short' }).format(periodDate)
+          : new Intl.DateTimeFormat('en-IN', { month: 'short' }).format(periodDate),
+        units: unitsByPeriod.get(key) ?? 0,
+      };
+    });
+  }, [salesTrendRange, salesTrend.data, salesTrendGranularity, salesTrendPeriod]);
   const inventory = useQuery({ queryKey: ['inventory', companyId, search], queryFn: () => api.inventory(companyId, search), enabled: Boolean(companyId) });
   const movements = useQuery({ queryKey: ['movements', companyId], queryFn: () => api.movements(companyId), enabled: Boolean(companyId) });
   const products = useQuery({ queryKey: ['products', companyId], queryFn: () => api.products(companyId), enabled: Boolean(companyId) });
@@ -179,24 +247,54 @@ export default function App() {
 
       <main className="main-content">
         <header className="topbar"><div className="breadcrumb">Workspace <span>/</span> {activeTab === 'expenses' ? 'Payouts & Cash' : workspaceTabs.find((tab) => tab.id === activeTab)?.label}</div><div className="topbar-actions"><label className="topbar-company"><span className="sr-only">Select inventory company</span><select aria-label="Select inventory company" value={companyId} onChange={(event) => setCompanyId(event.target.value)} disabled={companies.isLoading || !companies.data?.length}><option value="">{companies.isLoading ? 'Loading company…' : 'Choose company'}</option>{companies.data?.map((company) => <option key={company._id} value={company._id}>{company.name}</option>)}</select></label><span className="date-chip"><Clock3 size={14} />{today}</span></div></header>
-        <div className="page-wrap">
+        <div className={`page-wrap ${activeTab === 'dashboard' ? 'dashboard-page' : ''}`}>
           {hasError && <div className="connection-alert"><CircleAlert size={17} /><span>Could not load live inventory. Start the API and connect MongoDB to view and save business data.</span><a href="/">Retry</a></div>}
           {notice && <div className="toast-note">{notice}</div>}
-          <section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-mark" />{currentCompany?.name.toUpperCase() ?? 'INVENTORY CONTROL'}</div><h1>{activeTab === 'dashboard' ? 'Inventory, in good order.' : activeTab === 'expenses' ? 'Operating expenses' : workspaceTabs.find((tab) => tab.id === activeTab)?.label}</h1><p>{activeTab === 'dashboard' ? 'A clear view of physical stock, sales channels, supplier balances, and platform payouts.' : activeTab === 'stock' ? 'Search products, review physical inventory, and open a product to see its movement history.' : activeTab === 'sales' ? 'Review product sales across companies and marketplaces.' : activeTab === 'parties' ? 'Manage customer and supplier profiles, payments, and account statements.' : activeTab === 'vendors' ? 'Review supplier balances, purchase bills, and payments.' : activeTab === 'cashflow' ? 'Keep platform receipts, bank cash, withdrawals, and operating costs distinct.' : activeTab === 'expenses' ? 'Record and review operating expenses by date and category.' : 'Review selling companies, channel performance, and sales attribution.'}</p></div><div className="heading-actions">{activeTab === 'stock' ? <button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase / stock-in</button> : activeTab === 'vendors' ? <><button className="button button-quiet" onClick={() => setModal('vendor')}><Plus size={16} /> Add supplier</button><button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase</button></> : activeTab === 'cashflow' ? <><button className="button button-quiet" onClick={() => { setFarmMoneyInitialType('FARM_RECEIPT'); setModal('farmMoney'); }}><ArrowDownLeft size={16} /> Add payout receipt</button><button className="button button-primary" onClick={() => { setFarmMoneyInitialType('WITHDRAWAL'); setModal('farmMoney'); }}><ArrowUpRight size={16} /> Record withdrawal</button></> : activeTab === 'expenses' ? <button className="button button-primary" onClick={() => setModal('expense')}><Plus size={16} /> Add expense</button> : activeTab === 'farms' ? <><button className="button button-quiet" onClick={() => setModal('company')}><Plus size={16} /> Add inventory company</button><button className="button button-primary" onClick={() => setModal('farm')}><Plus size={16} /> Add sales company</button></> : activeTab === 'sales' ? <button className="button button-primary" onClick={() => setModal('sales')}><ArrowUpRight size={16} /> Enter sales batch</button> : activeTab === 'parties' ? null : <><button className="button button-quiet" onClick={() => { navigateTo('farms'); setModal('farm'); }}><Plus size={16} /> Add sales company</button><button className="button button-primary" onClick={() => { navigateTo('sales'); setModal('sales'); }}><ArrowUpRight size={16} /> Enter sales batch</button></>}</div></section>
+          <section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-mark" />{currentCompany?.name.toUpperCase() ?? 'INVENTORY CONTROL'}</div><h1>{activeTab === 'dashboard' ? 'Inventory, in good order.' : activeTab === 'expenses' ? 'Operating expenses' : workspaceTabs.find((tab) => tab.id === activeTab)?.label}</h1><p>{activeTab === 'dashboard' ? 'A clear view of physical stock, sales channels, supplier balances, and platform payouts.' : activeTab === 'stock' ? 'Search products, review physical inventory, and open a product to see its movement history.' : activeTab === 'sales' ? 'Review product sales across companies and marketplaces.' : activeTab === 'parties' ? 'Manage customer and supplier profiles, payments, and account statements.' : activeTab === 'vendors' ? 'Review supplier balances, purchase bills, and payments.' : activeTab === 'cashflow' ? 'Keep platform receipts, bank cash, withdrawals, and operating costs distinct.' : activeTab === 'expenses' ? 'Record and review operating expenses by date and category.' : 'Review selling companies, channel performance, and sales attribution.'}</p></div><div className={`heading-actions ${activeTab === 'dashboard' ? 'dashboard-heading-actions' : ''}`}>{activeTab === 'dashboard' ? <><div className="dashboard-summary-filter"><label className="form-field"><span>Summary period</span><select value={datePreset} onChange={(event) => { setDatePreset(event.target.value as DatePreset); setCashFlowPage(1); setExpensePage(1); }}><option value="TODAY">Today</option><option value="YESTERDAY">Yesterday</option><option value="THIS_WEEK">This week</option><option value="THIS_MONTH">This month</option><option value="LAST_MONTH">Last month</option><option value="LAST_6_MONTHS">Last 6 months</option><option value="THIS_YEAR">This year</option><option value="CUSTOM">Custom range</option></select></label>{datePreset === 'CUSTOM' && <><label className="form-field"><span>From</span><input type="date" value={customFrom} onChange={(event) => { setCustomFrom(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label><label className="form-field"><span>To</span><input type="date" value={customTo} onChange={(event) => { setCustomTo(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label></>}</div><button className="button button-primary" onClick={() => { navigateTo('sales'); setModal('sales'); }}><ArrowUpRight size={16} /> Enter sales batch</button></> : activeTab === 'stock' ? <button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase / stock-in</button> : activeTab === 'vendors' ? <><button className="button button-quiet" onClick={() => setModal('vendor')}><Plus size={16} /> Add supplier</button><button className="button button-primary" onClick={() => setModal('purchase')}><ArrowDownLeft size={16} /> Record purchase</button></> : activeTab === 'cashflow' ? <><button className="button button-quiet" onClick={() => { setFarmMoneyInitialType('FARM_RECEIPT'); setModal('farmMoney'); }}><ArrowDownLeft size={16} /> Add payout receipt</button><button className="button button-primary" onClick={() => { setFarmMoneyInitialType('WITHDRAWAL'); setModal('farmMoney'); }}><ArrowUpRight size={16} /> Record withdrawal</button></> : activeTab === 'expenses' ? <button className="button button-primary" onClick={() => setModal('expense')}><Plus size={16} /> Add expense</button> : activeTab === 'farms' ? <><button className="button button-quiet" onClick={() => setModal('company')}><Plus size={16} /> Add inventory company</button><button className="button button-primary" onClick={() => setModal('farm')}><Plus size={16} /> Add sales company</button></> : activeTab === 'sales' ? <button className="button button-primary" onClick={() => setModal('sales')}><ArrowUpRight size={16} /> Enter sales batch</button> : activeTab === 'parties' ? null : <button className="button button-primary" onClick={() => { navigateTo('farms'); setModal('farm'); }}><Plus size={16} /> Add sales company</button>}</div></section>
           {(activeTab === 'cashflow' || activeTab === 'expenses') && <nav className="finance-subnav" aria-label="Payouts and cash sections"><button className={`workspace-tab ${activeTab === 'cashflow' ? 'selected' : ''}`} aria-current={activeTab === 'cashflow' ? 'page' : undefined} onClick={() => navigateTo('cashflow')}><Wallet size={16} /><span>Payouts & Cash</span></button><button className={`workspace-tab ${activeTab === 'expenses' ? 'selected' : ''}`} aria-current={activeTab === 'expenses' ? 'page' : undefined} onClick={() => navigateTo('expenses')}><ArrowUpRight size={16} /><span>Operating expenses</span></button></nav>}
 
-          {(activeTab === 'dashboard' || activeTab === 'cashflow' || activeTab === 'expenses') && <section className="date-filter-bar"><label className="form-field"><span>{activeTab === 'cashflow' ? 'Payout period' : activeTab === 'expenses' ? 'Expense period' : 'Dashboard period'}</span><select value={datePreset} onChange={(event) => { setDatePreset(event.target.value as DatePreset); setCashFlowPage(1); setExpensePage(1); }}><option value="TODAY">Today</option><option value="YESTERDAY">Yesterday</option><option value="THIS_WEEK">This week</option><option value="THIS_MONTH">This month</option><option value="LAST_MONTH">Last month</option><option value="LAST_6_MONTHS">Last 6 months</option><option value="THIS_YEAR">This year</option><option value="CUSTOM">Custom range</option></select></label>{datePreset === 'CUSTOM' && <><label className="form-field"><span>From</span><input type="date" value={customFrom} onChange={(event) => { setCustomFrom(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label><label className="form-field"><span>To</span><input type="date" value={customTo} onChange={(event) => { setCustomTo(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label></>}{activeTab === 'cashflow' && <label className="form-field"><span>Sales company</span><select value={cashFlowFarmFilter} onChange={(event) => { setCashFlowFarmFilter(event.target.value); setCashFlowPage(1); }}><option value="">All companies</option>{farms.data?.map((farm) => <option key={farm._id} value={farm._id}>{farm.name}</option>)}</select></label>}<span className="date-range-caption">{dateRange.label}</span></section>}
+          {(activeTab === 'cashflow' || activeTab === 'expenses') && <section className="date-filter-bar"><label className="form-field"><span>{activeTab === 'cashflow' ? 'Payout period' : 'Expense period'}</span><select value={datePreset} onChange={(event) => { setDatePreset(event.target.value as DatePreset); setCashFlowPage(1); setExpensePage(1); }}><option value="TODAY">Today</option><option value="YESTERDAY">Yesterday</option><option value="THIS_WEEK">This week</option><option value="THIS_MONTH">This month</option><option value="LAST_MONTH">Last month</option><option value="LAST_6_MONTHS">Last 6 months</option><option value="THIS_YEAR">This year</option><option value="CUSTOM">Custom range</option></select></label>{datePreset === 'CUSTOM' && <><label className="form-field"><span>From</span><input type="date" value={customFrom} onChange={(event) => { setCustomFrom(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label><label className="form-field"><span>To</span><input type="date" value={customTo} onChange={(event) => { setCustomTo(event.target.value); setCashFlowPage(1); setExpensePage(1); }} /></label></>}{activeTab === 'cashflow' && <label className="form-field"><span>Sales company</span><select value={cashFlowFarmFilter} onChange={(event) => { setCashFlowFarmFilter(event.target.value); setCashFlowPage(1); }}><option value="">All companies</option>{farms.data?.map((farm) => <option key={farm._id} value={farm._id}>{farm.name}</option>)}</select></label>}<span className="date-range-caption">{dateRange.label}</span></section>}
           {activeTab === 'parties' && <PartiesWorkspace onOpenInvoice={(invoiceId) => setPreviewInvoiceId(invoiceId)} onOpenPurchase={(purchaseId) => setPreviewPurchaseId(purchaseId)} />}
 
-          {activeTab === 'dashboard' && <section className="metrics-grid" aria-label="Daily business summary">
-            <Metric label="Active products" value={summary.data?.productCount ?? 0} icon={<PackagePlus size={18} />} accent="green" note="Browse product balances" loading={summary.isLoading} onClick={() => navigateTo('stock')} />
-            <Metric label="Physical stock" value={quantity.format(summary.data?.totalUnits ?? 0)} icon={<Boxes size={18} />} accent="blue" note="Available quantity · open stock" loading={summary.isLoading} onClick={() => navigateTo('stock')} />
-            <Metric label="Stock value" value={money.format(summary.data?.stockValue ?? 0)} icon={<Sprout size={18} />} accent="orange" note="Estimated at purchase cost" loading={summary.isLoading} onClick={() => navigateTo('stock')} />
-            <Metric label="Needs attention" value={summary.data?.lowStockCount ?? 0} icon={<CircleAlert size={18} />} accent="red" note={`${summary.data?.outOfStockCount ?? 0} out of stock`} loading={summary.isLoading} onClick={() => navigateTo('stock')} />
-            <Metric label={`${dateRange.shortLabel} sales units`} value={quantity.format(summary.data?.todaySalesUnits ?? 0)} icon={<ArrowUpRight size={18} />} accent="blue" note={`${currentCompany?.name ?? 'Selected company'} · ${summary.data?.salesInvoiceCount ?? 0} finalized sales invoices`} loading={summary.isLoading} onClick={() => navigateTo('sales')} />
-            <Metric label={`${dateRange.shortLabel} purchases`} value={money.format(summary.data?.todayPurchase ?? 0)} icon={<ArrowDownLeft size={18} />} accent="green" note="Finalized stock-in purchases" loading={summary.isLoading} onClick={() => navigateTo('vendors')} />
-            <Metric label="Supplier outstanding" value={money.format(summary.data?.vendorOutstanding ?? 0)} icon={<Warehouse size={18} />} accent="orange" note="Purchases less payments · view suppliers" loading={summary.isLoading} onClick={() => navigateTo('vendors')} />
-            <Metric label="Payout balance" value={money.format(summary.data?.remainingFarmMoney ?? 0)} icon={<Sprout size={18} />} accent="red" note={`${money.format(summary.data?.farmMoneyReceived ?? 0)} received · ${money.format(summary.data?.withdrawals ?? 0)} withdrawn`} loading={summary.isLoading} onClick={() => navigateTo('cashflow')} />
+          {activeTab === 'dashboard' && <div className="dashboard-overview">
+            <section className="dashboard-metric-section" aria-label="Inventory overview">
+              <div className="dashboard-section-heading"><div><span>INVENTORY</span><h2>Stock overview</h2></div><button className="text-button" onClick={() => navigateTo('stock')}>View stock <ArrowUpRight size={14} /></button></div>
+              <div className="metrics-grid">
+                <Metric label="Active products" value={summary.data?.productCount ?? 0} icon={<PackagePlus size={18} />} accent="green" note="Browse product balances" loading={summary.isLoading} onClick={() => navigateTo('stock')} />
+                <Metric label="Physical stock" value={quantity.format(summary.data?.totalUnits ?? 0)} icon={<Boxes size={18} />} accent="blue" note="Available quantity · open stock" loading={summary.isLoading} onClick={() => navigateTo('stock')} />
+                <Metric label="Stock value" value={money.format(summary.data?.stockValue ?? 0)} icon={<Sprout size={18} />} accent="orange" note="Estimated at purchase cost" loading={summary.isLoading} onClick={() => navigateTo('stock')} />
+                <Metric label="Needs attention" value={summary.data?.lowStockCount ?? 0} icon={<CircleAlert size={18} />} accent="red" note={`${summary.data?.outOfStockCount ?? 0} out of stock`} loading={summary.isLoading} onClick={() => navigateTo('stock')} />
+              </div>
+            </section>
+            <section className="dashboard-metric-section" aria-label="Business activity">
+              <div className="dashboard-section-heading"><div><span>BUSINESS ACTIVITY · {dateRange.shortLabel.toUpperCase()}</span><h2>Sales, purchases & balances</h2></div></div>
+              <div className="metrics-grid">
+                <Metric label={`${dateRange.shortLabel} sales units`} value={quantity.format(summary.data?.todaySalesUnits ?? 0)} icon={<ArrowUpRight size={18} />} accent="blue" note={`${currentCompany?.name ?? 'Selected company'} · ${summary.data?.salesInvoiceCount ?? 0} finalized sales invoices`} loading={summary.isLoading} onClick={() => navigateTo('sales')} />
+                <Metric label={`${dateRange.shortLabel} purchases`} value={money.format(summary.data?.todayPurchase ?? 0)} icon={<ArrowDownLeft size={18} />} accent="green" note="Finalized stock-in purchases" loading={summary.isLoading} onClick={() => navigateTo('vendors')} />
+                <Metric label="Supplier outstanding" value={money.format(summary.data?.vendorOutstanding ?? 0)} icon={<Warehouse size={18} />} accent="orange" note="Purchases less payments · view suppliers" loading={summary.isLoading} onClick={() => navigateTo('vendors')} />
+                <Metric label="Payout balance" value={money.format(summary.data?.remainingFarmMoney ?? 0)} icon={<Sprout size={18} />} accent="red" note={`${money.format(summary.data?.farmMoneyReceived ?? 0)} received · ${money.format(summary.data?.withdrawals ?? 0)} withdrawn`} loading={summary.isLoading} onClick={() => navigateTo('cashflow')} />
+              </div>
+            </section>
+          </div>}
+
+          {activeTab === 'dashboard' && <section className="dashboard-analytics" aria-label="Sales analytics">
+            <header className="dashboard-analytics-header">
+              <div><span className="panel-kicker">SALES ANALYTICS</span><h2>Performance at a glance</h2><p>Choose a reporting period independently for each chart.</p></div>
+            </header>
+            <div className="dashboard-chart-grid">
+              <section className="dashboard-chart-card dashboard-chart-trend" aria-label="Sales trend chart">
+                <div className="dashboard-chart-heading"><div><h3>{salesTrendGranularity === 'day' ? 'Daily sales' : 'Monthly sales'}</h3><p>Units sold across finalized invoices and sales batches</p></div><div className="dashboard-chart-actions"><label className="dashboard-chart-period"><select aria-label="Sales trend period" value={salesTrendPeriod} onChange={(event) => setSalesTrendPeriod(parseDashboardChartPeriod(event.target.value))}>{dashboardChartPeriods.map((period) => <option key={period.value} value={period.value}>{period.label}</option>)}</select></label><div className="monthly-sales-total"><strong>{salesTrend.isLoading ? '—' : quantity.format(salesTrendChart.reduce((total, item) => total + item.units, 0))}</strong><span>units sold</span></div></div></div>
+                {salesTrend.isError ? <div className="monthly-sales-loading">Could not load sales trend. Check the API connection and try again.</div> : salesTrend.isLoading ? <div className="monthly-sales-loading">Loading sales trend…</div> : salesTrendPeriod === 'TILL_NOW' && !salesTrend.data?.length ? <div className="monthly-sales-loading">No sales found up to today.</div> : <Suspense fallback={<div className="monthly-sales-loading">Loading chart…</div>}><MonthlySalesChart data={salesTrendChart} granularity={salesTrendGranularity} /></Suspense>}
+              </section>
+              <section className="dashboard-chart-card" aria-label="Top selling products chart">
+                <div className="dashboard-chart-heading"><div><h3>Top-selling products</h3><p>Ranked by units sold in the selected period</p></div><div className="dashboard-chart-actions"><label className="dashboard-chart-period"><select aria-label="Top-selling products period" value={productSalesPeriod} onChange={(event) => setProductSalesPeriod(parseDashboardChartPeriod(event.target.value))}>{dashboardChartPeriods.map((period) => <option key={period.value} value={period.value}>{period.label}</option>)}</select></label>{productSales.data && <div className="monthly-sales-total"><strong>{quantity.format(productSalesRanking.reduce((total, item) => total + item.units, 0))}</strong><span>top 10 units</span></div>}</div></div>
+                {productSales.isError ? <div className="monthly-sales-loading">Could not load product sales. Check the API connection and try again.</div> : productSales.isLoading ? <div className="monthly-sales-loading">Loading product sales…</div> : productSalesRanking.length ? <Suspense fallback={<div className="monthly-sales-loading">Loading chart…</div>}><ProductUnitsChart data={productSalesRanking} /></Suspense> : <div className="monthly-sales-loading">No product sales found in this period.</div>}
+              </section>
+              <section className="dashboard-chart-card" aria-label="Sales company performance chart">
+                <div className="dashboard-chart-heading"><div><h3>Sales by company</h3><p>Average units sold per day during the selected period</p></div><div className="dashboard-chart-actions"><label className="dashboard-chart-period"><select aria-label="Sales by company period" value={companyPerformancePeriod} onChange={(event) => setCompanyPerformancePeriod(parseDashboardChartPeriod(event.target.value))}>{dashboardChartPeriods.map((period) => <option key={period.value} value={period.value}>{period.label}</option>)}</select></label>{companyPerformance.data && <div className="monthly-sales-total"><strong>{quantity.format(companyPerformance.data.reduce((total, item) => total + item.unitsSold, 0) / companyPerformanceDays)}</strong><span>units / day</span></div>}</div></div>
+                {companyPerformance.isError ? <div className="monthly-sales-loading">Could not load company performance. Check the API connection and try again.</div> : companyPerformance.isLoading ? <div className="monthly-sales-loading">Loading company performance…</div> : companyPerformance.data?.length ? <Suspense fallback={<div className="monthly-sales-loading">Loading chart…</div>}><CompanyPerformanceChart data={companyPerformance.data} daysInPeriod={companyPerformanceDays} /></Suspense> : <div className="monthly-sales-loading">No sales company activity found in this period.</div>}
+              </section>
+            </div>
           </section>}
 
           {activeTab === 'cashflow' && <>
@@ -786,6 +884,65 @@ function getDateRange(preset: DatePreset, customFrom: string, customTo: string) 
   }
   to.setHours(23, 59, 59, 999);
   return { from: from.toISOString(), to: to.toISOString(), label, shortLabel };
+}
+
+function getDashboardChartRange(period: DashboardChartPeriod) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let start: Date;
+  let endDate = today;
+  switch (period) {
+    case 'TODAY':
+      start = today;
+      break;
+    case 'YESTERDAY':
+      start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+      endDate = start;
+      break;
+    case 'LAST_7_DAYS':
+      start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+      break;
+    case 'LAST_30_DAYS':
+      start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29);
+      break;
+    case 'THIS_MONTH':
+      start = new Date(today.getFullYear(), today.getMonth(), 1);
+      break;
+    case 'LAST_3_MONTHS':
+    case 'LAST_6_MONTHS': {
+      const monthsBack = period === 'LAST_3_MONTHS' ? 3 : 6;
+      const targetMonth = new Date(today.getFullYear(), today.getMonth() - monthsBack, 1);
+      const lastDayOfTargetMonth = new Date(targetMonth.getFullYear(), targetMonth.getMonth() + 1, 0).getDate();
+      targetMonth.setDate(Math.min(today.getDate(), lastDayOfTargetMonth));
+      start = targetMonth;
+      break;
+    }
+    case 'THIS_YEAR':
+      start = new Date(today.getFullYear(), 0, 1);
+      break;
+    case 'TILL_NOW':
+      start = new Date(0);
+      break;
+  }
+  const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate(), 23, 59, 59, 999);
+  const monthly = ['THIS_MONTH', 'LAST_3_MONTHS', 'LAST_6_MONTHS', 'THIS_YEAR', 'TILL_NOW'].includes(period);
+  const monthCount = (end.getFullYear() - start.getFullYear()) * 12 + end.getMonth() - start.getMonth() + 1;
+  const daysInPeriod = Math.floor((Date.UTC(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()) - Date.UTC(start.getFullYear(), start.getMonth(), start.getDate())) / 86_400_000) + 1;
+  return {
+    from: start.toISOString(),
+    to: end.toISOString(),
+    startYear: start.getFullYear(),
+    startMonth: start.getMonth(),
+    startDay: start.getDate(),
+    daysInPeriod,
+    count: monthly ? monthCount : period === 'TODAY' || period === 'YESTERDAY' ? 1 : period === 'LAST_7_DAYS' ? 7 : 30,
+  };
+}
+
+function parseDashboardChartPeriod(value: string): DashboardChartPeriod {
+  const period = dashboardChartPeriods.find((item) => item.value === value);
+  if (period) return period.value;
+  throw new Error(`Invalid dashboard chart period: ${value}`);
 }
 
 function SalesBatchForm({ products, farms, customers, busy, error, onSubmit }: { products: Product[]; farms: Farm[]; customers: Party[]; busy: boolean; error: string; onSubmit: (data: { farmId?: string; salesDate: string; marketplace: 'AMAZON' | 'MEESHO' | 'FLIPKART' | 'OTHER' | 'DIRECT'; customerId?: string; customerName?: string; customerCompany?: string; reference?: string; notes?: string; items: Array<{ productId: string; quantity: number }> }) => void }) {

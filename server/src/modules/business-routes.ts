@@ -415,6 +415,70 @@ businessRouter.get('/dashboard/summary', async (request, response) => {
   } });
 });
 
+businessRouter.get('/dashboard/monthly-sales', async (request, response) => {
+  const parsed = z.object({ from: date, to: date, granularity: z.enum(['day', 'month']).default('month'), handlingCompanyId: id.optional() }).safeParse(request.query);
+  if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid monthly sales filters', 400, 'VALIDATION_ERROR');
+  const from = new Date(parsed.data.from);
+  const to = new Date(parsed.data.to);
+  if (from > to) throw new AppError('From date must not be after to date', 400, 'VALIDATION_ERROR');
+  const periodFormat = parsed.data.granularity === 'day' ? '%Y-%m-%d' : '%Y-%m';
+  const companyFilter = parsed.data.handlingCompanyId
+    ? { $or: [{ handlingCompanyId: new Types.ObjectId(parsed.data.handlingCompanyId) }, { companyId: new Types.ObjectId(parsed.data.handlingCompanyId) }] }
+    : {};
+  const [batchMonths, invoiceMonths] = await Promise.all([
+    SalesBatch.aggregate([
+      { $match: { salesDate: { $gte: from, $lte: to }, ...companyFilter } },
+      { $group: { _id: { $dateToString: { format: periodFormat, date: '$salesDate', timezone: 'Asia/Kolkata' } }, units: { $sum: '$totalQuantity' } } },
+    ]),
+    Invoice.aggregate([
+      { $match: { status: 'FINALIZED', invoiceType: 'SALES', invoiceDate: { $gte: from, $lte: to }, ...companyFilter } },
+      { $unwind: '$items' },
+      { $group: { _id: { $dateToString: { format: periodFormat, date: '$invoiceDate', timezone: 'Asia/Kolkata' } }, units: { $sum: '$items.quantity' } } },
+    ]),
+  ]);
+  const periodTotals = new Map<string, number>();
+  for (const row of [...batchMonths, ...invoiceMonths]) periodTotals.set(row._id, (periodTotals.get(row._id) ?? 0) + Number(row.units));
+  response.json({ success: true, data: [...periodTotals].sort(([left], [right]) => left.localeCompare(right)).map(([period, units]) => ({ period, units })) });
+});
+
+businessRouter.get('/dashboard/company-performance', async (request, response) => {
+  const parsed = z.object({ from: date, to: date, handlingCompanyId: id.optional() }).safeParse(request.query);
+  if (!parsed.success) throw new AppError(parsed.error.issues[0]?.message ?? 'Invalid company performance filters', 400, 'VALIDATION_ERROR');
+  const from = new Date(parsed.data.from);
+  const to = new Date(parsed.data.to);
+  if (from > to) throw new AppError('From date must not be after to date', 400, 'VALIDATION_ERROR');
+  const companyFilter = parsed.data.handlingCompanyId
+    ? { $or: [{ handlingCompanyId: new Types.ObjectId(parsed.data.handlingCompanyId) }, { companyId: new Types.ObjectId(parsed.data.handlingCompanyId) }] }
+    : {};
+  const [batchSales, invoiceSales] = await Promise.all([
+    SalesBatch.aggregate([
+      { $match: { salesDate: { $gte: from, $lte: to }, farmId: { $exists: true, $ne: null }, ...companyFilter } },
+      { $group: { _id: '$farmId', unitsSold: { $sum: '$totalQuantity' } } },
+    ]),
+    Invoice.aggregate([
+      { $match: { status: 'FINALIZED', invoiceType: 'SALES', invoiceDate: { $gte: from, $lte: to }, farmId: { $exists: true, $ne: null }, ...companyFilter } },
+      { $group: { _id: '$farmId', unitsSold: { $sum: { $sum: '$items.quantity' } } } },
+    ]),
+  ]);
+  const totals = new Map<string, number>();
+  for (const row of batchSales) {
+    const key = row._id.toString();
+    totals.set(key, Number(row.unitsSold));
+  }
+  for (const row of invoiceSales) {
+    const key = row._id.toString();
+    totals.set(key, (totals.get(key) ?? 0) + Number(row.unitsSold));
+  }
+  const farms = await Farm.find({ _id: { $in: [...totals.keys()] } }).select('name').lean();
+  const farmNames = new Map(farms.map((farm) => [farm._id.toString(), farm.name]));
+  const data = [...totals].map(([farmId, unitsSold]) => ({
+    farmId,
+    companyName: farmNames.get(farmId) ?? 'Archived company',
+    unitsSold,
+  })).sort((left, right) => right.unitsSold - left.unitsSold);
+  response.json({ success: true, data });
+});
+
 businessRouter.get('/dashboard/daily-sales', async (request, response) => {
   const from = typeof request.query.from === 'string' ? new Date(request.query.from) : new Date(new Date().setHours(0, 0, 0, 0));
   const to = typeof request.query.to === 'string' ? new Date(request.query.to) : new Date(new Date().setHours(23, 59, 59, 999));

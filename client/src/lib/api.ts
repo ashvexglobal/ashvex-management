@@ -57,6 +57,8 @@ export type InvoiceDetails = Invoice & {
 export type PurchaseRecord = { _id: string; purchaseNumber: string; invoiceNumber?: string; purchaseDate: string; totalAmount: number; status: 'DRAFT' | 'FINALIZED' | 'CANCELLED'; vendorId?: Vendor };
 export type PurchaseDetails = PurchaseRecord & { subtotal: number; taxCharges: number; remark?: string; items: Array<{ sku?: string; productName?: string; quantity?: number; unit?: string; rate?: number; amount?: number }> };
 export type BusinessSummary = Summary & { todaySalesUnits: number; todayPurchase: number; vendorOutstanding: number; farmMoneyReceived: number; withdrawals: number; remainingFarmMoney: number; salesInvoiceCount: number; stockInInvoiceCount: number };
+export type MonthlySalesPoint = { period: string; units: number };
+export type CompanyPerformancePoint = { farmId: string; companyName: string; unitsSold: number };
 export type SalesBatch = {
   _id: string;
   batchNumber: string;
@@ -222,6 +224,8 @@ export const api = {
   cancelInvoice: async (invoiceId: string) => (await http.post<ApiResponse<Invoice>>(`/invoices/${invoiceId}/cancel`)).data.data,
   invoicePdf: async (invoiceId: string) => (await http.get<Blob>(`/invoices/${invoiceId}/pdf`, { responseType: 'blob' })).data,
   dashboard: async (from?: string, to?: string, handlingCompanyId?: string) => (await http.get<ApiResponse<BusinessSummary>>('/dashboard/summary', { params: { from, to, handlingCompanyId } })).data.data,
+  salesTrend: async (from: string, to: string, granularity: 'day' | 'month', handlingCompanyId?: string) => (await http.get<ApiResponse<MonthlySalesPoint[]>>('/dashboard/monthly-sales', { params: { from, to, granularity, handlingCompanyId } })).data.data,
+  companyPerformance: async (from: string, to: string, handlingCompanyId?: string) => (await http.get<ApiResponse<CompanyPerformancePoint[]>>('/dashboard/company-performance', { params: { from, to, handlingCompanyId } })).data.data,
   expenses: async (filters: { from?: string; to?: string; page?: number; limit?: number }) => (await http.get<ApiResponse<ExpensePage>>('/expenses', { params: filters })).data.data,
   createExpense: async (data: { date: string; farmId?: string; category: string; amount: number; description?: string }) => (await http.post<ApiResponse<ExpenseRecord>>('/expenses', data)).data.data,
   dailySales: async (filters: { from?: string; to?: string; farmId?: string; handlingCompanyId?: string; marketplace?: string }) => (await http.get<ApiResponse<Array<{ productName: string; sku: string; quantity: number; farm?: Farm; handlingCompany?: Company; marketplace: string }>>>('/dashboard/daily-sales', { params: filters })).data.data,
